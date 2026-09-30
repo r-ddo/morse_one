@@ -121,13 +121,23 @@ export class App {
           case "result": {
             display.className = `display ${VERDICT_CLASS[e.verdict]}`;
             display.textContent = e.target;
-            const rt = e.rtMs === null ? "時間切れ" : e.verdict === "slow" ? `${e.rtMs} ms（遅い）` : `${e.rtMs} ms`;
-            detail.replaceChildren(h("div", {}, `${prettyCode(MORSE[e.target])}　${rt}`));
+            const rt = { fast: `${e.rtMs} ms`, slow: `${e.rtMs} ms（遅い）`, wrong: "不正解", timeout: "時間切れ" }[e.verdict];
+            detail.replaceChildren(
+              h("div", {}, rt),
+              h("div", { class: "code-line", dataset: { which: "target" } },
+                `正解 ${e.target}　${prettyCode(MORSE[e.target])}`),
+            );
             if (e.answer && e.answer !== e.target) {
-              detail.append(h("div", { class: "yours" }, `あなたの答え ${e.answer}　${prettyCode(MORSE[e.answer])}`));
+              detail.append(h("div", { class: "code-line yours", dataset: { which: "answer" } },
+                `あなたの答え ${e.answer}　${prettyCode(MORSE[e.answer])}`));
             }
             break;
           }
+          case "replay":
+            for (const line of detail.querySelectorAll<HTMLElement>(".code-line")) {
+              line.classList.toggle("playing", line.dataset.which === e.which);
+            }
+            break;
           case "limit":
             this.settings = { ...this.settings, limitMs: e.limitMs };
             saveSettings(this.settings);

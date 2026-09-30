@@ -36,6 +36,8 @@ export type DrillEvent =
   | { type: "question"; index: number; total: number; limitMs: number }
   | ({ type: "result"; index: number; total: number } & DrillResult)
   | { type: "limit"; limitMs: number }
+  /** 答え合わせの音を再生中（target: 正解の符号 / answer: 自分の答えの符号 / null: 再生終了） */
+  | { type: "replay"; which: "target" | "answer" | null }
   | { type: "finished"; summary: DrillSummary };
 
 export interface DrillDeps {
@@ -52,7 +54,7 @@ const NEXT_DELAY = 350;
 /** 聞き比べ・聞き直しの音の間（ミリ秒） */
 const COMPARE_GAP = 400;
 /** 遅い正解・誤答後に次の問題へ進むまでの間（ミリ秒） */
-const AFTER_MISS_DELAY = 800;
+const AFTER_MISS_DELAY = 1200;
 
 /** 単字即答モード：1 文字を聞いてすぐ入力する */
 export class SingleDrill {
@@ -159,12 +161,17 @@ export class SingleDrill {
       // 正解の符号を聞き直す。誤答なら続けて自分の答えの符号を鳴らして聞き比べる
       await sleep(COMPARE_GAP);
       if (this.aborted) return;
+      onEvent({ type: "replay", which: "target" });
       await player.play(this.target, this.timing, this.tone).done;
       if (verdict === "wrong" && answer !== null && MORSE[answer]) {
+        onEvent({ type: "replay", which: null });
         await sleep(COMPARE_GAP);
         if (this.aborted) return;
+        onEvent({ type: "replay", which: "answer" });
         await player.play(answer, this.timing, this.tone).done;
       }
+      if (this.aborted) return;
+      onEvent({ type: "replay", which: null });
       await sleep(AFTER_MISS_DELAY);
     }
     if (this.aborted) return;
