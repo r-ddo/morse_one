@@ -1,0 +1,8 @@
+{
+  "name": "morse_one",
+  "short_name": "morse_one",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111"
+}
