@@ -131,3 +131,47 @@ export async function loadMocks(): Promise<MockResult[]> {
   await done(tx);
   return (req.result as MockResult[]).sort((a, b) => b.ts - a.ts);
 }
+
+export async function loadAttempts(): Promise<Attempt[]> {
+  const db = await openDb();
+  const tx = db.transaction("attempts", "readonly");
+  const req = tx.objectStore("attempts").getAll();
+  await done(tx);
+  return req.result as Attempt[];
+}
+
+export interface StoredData {
+  attempts: Attempt[];
+  charStats: CharStat[];
+  mocks: MockResult[];
+}
+
+export async function loadAll(): Promise<StoredData> {
+  const db = await openDb();
+  const tx = db.transaction(["attempts", "charStats", "mocks"], "readonly");
+  const attempts = tx.objectStore("attempts").getAll();
+  const charStats = tx.objectStore("charStats").getAll();
+  const mocks = tx.objectStore("mocks").getAll();
+  await done(tx);
+  return {
+    attempts: attempts.result as Attempt[],
+    charStats: charStats.result as CharStat[],
+    mocks: mocks.result as MockResult[],
+  };
+}
+
+/** 保存されているデータをすべて置き換える（1 つのトランザクションで行い、失敗したら元のまま） */
+export async function replaceAll(data: StoredData): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(["attempts", "charStats", "mocks"], "readwrite");
+  const attempts = tx.objectStore("attempts");
+  const charStats = tx.objectStore("charStats");
+  const mocks = tx.objectStore("mocks");
+  attempts.clear();
+  charStats.clear();
+  mocks.clear();
+  for (const a of data.attempts) attempts.put(a);
+  for (const s of data.charStats) charStats.put(s);
+  for (const m of data.mocks) mocks.put(m);
+  await done(tx);
+}

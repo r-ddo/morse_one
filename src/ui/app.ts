@@ -8,12 +8,13 @@ import { COMMON_PAIRS, type ConfusionTracker } from "../training/confusion";
 import { ContrastDrill, type ContrastSummary } from "../training/contrastDrill";
 import { GroupDrill, UNKNOWN, type GroupSummary } from "../training/groupDrill";
 import { SingleDrill, type DrillResult, type DrillSummary, type Verdict } from "../training/singleDrill";
-import { weakness, type CharStat } from "../training/stats";
+import type { CharStat } from "../training/stats";
 import { h, prettyCode } from "./dom";
 import { field, range, sec, select, wpm } from "./form";
 import type { ActiveDrill, ScreenContext } from "./context";
 import { createKeyboard } from "./keyboard";
 import { showMockMenu } from "./mockScreen";
+import { showStats } from "./statsScreen";
 import { showStreamMenu } from "./streamScreen";
 
 export class App {
@@ -65,7 +66,7 @@ export class App {
       h("div", { class: "row" },
         h("button", { type: "button", onclick: () => void this.testTone() }, "試聴"),
         h("button", { type: "button", onclick: () => this.showContrastMenu() }, "聞き分け練習"),
-        h("button", { type: "button", onclick: () => this.showStats() }, "成績"),
+        h("button", { type: "button", onclick: () => void showStats(this.ctx) }, "成績"),
       ),
     );
   }
@@ -497,39 +498,6 @@ export class App {
         h("button", { class: "primary", type: "button", onclick: () => void this.startContrast(summary.pair) }, "もう一度"),
         h("button", { type: "button", onclick: () => this.showContrastMenu() }, "組み合わせを選ぶ"),
       ),
-      h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
-    );
-  }
-
-  private showStats(): void {
-    const now = Date.now();
-    const { limitMs } = this.settings;
-    const confusions = this.confusions.top(10, now);
-    const rows = charsetChars(this.settings.charset)
-      .map((c) => ({ c, s: this.stats.get(c), w: weakness(this.stats.get(c), limitMs, now) }))
-      .sort((a, b) => b.w - a.w);
-
-    this.render(
-      h("h1", {}, "成績"),
-      h("p", { class: "note" }, "苦手度の高い順。正答率・反応時間は直近の結果を重視した平均"),
-      h("table", { class: "stats" },
-        h("thead", {}, h("tr", {},
-          ...["文字", "符号", "回数", "正答率", "反応", "苦手度"].map((t) => h("th", {}, t)),
-        )),
-        h("tbody", {}, ...rows.map(({ c, s, w }) => h("tr", {},
-          h("td", { class: "char" }, c),
-          h("td", {}, prettyCode(MORSE[c])),
-          h("td", {}, String(s?.attempts ?? 0)),
-          h("td", {}, s?.attempts ? `${Math.round(s.accEma * 100)}%` : "―"),
-          h("td", {}, s?.rtEma != null ? `${Math.round(s.rtEma)}` : "―"),
-          h("td", {}, w.toFixed(2)),
-        ))),
-      ),
-      confusions.length > 0 &&
-        h("div", { class: "misses" },
-          h("h2", {}, "取り違え（最近のものほど上位）"),
-          ...confusions.map((p) => h("span", { class: "chip" }, `${p.a} / ${p.b} ×${p.count}`)),
-        ),
       h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
     );
   }
