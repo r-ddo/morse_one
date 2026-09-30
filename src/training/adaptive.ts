@@ -20,3 +20,22 @@ export function adaptLimit(limitMs: number, fastRate: number): number {
 export function giveUpMs(limitMs: number): number {
   return Math.min(10_000, Math.max(3_000, limitMs * 3));
 }
+
+/** 実効速度を見直す間隔（グループ数） */
+export const EWPM_WINDOW = 3;
+/** 正答率がこれ以上なら実効速度を上げる（文字間を詰める） */
+export const SPEED_UP_ACC = 0.9;
+/** 正答率がこれ未満なら実効速度を下げる（文字間を広げる） */
+export const SLOW_DOWN_ACC = 0.8;
+export const MIN_EWPM = 2;
+
+/** 直近 EWPM_WINDOW グループの正答率から次の実効速度を決める。文字速度を超えない */
+export function adaptEwpm(ewpm: number, accuracy: number, cwpm: number): number {
+  let next = ewpm;
+  if (accuracy >= SPEED_UP_ACC) next = ewpm * 1.1;
+  else if (accuracy < SLOW_DOWN_ACC) next = ewpm / 1.1;
+  next = Math.round(next * 2) / 2;
+  if (next === ewpm && accuracy >= SPEED_UP_ACC) next += 0.5;
+  if (next === ewpm && accuracy < SLOW_DOWN_ACC) next -= 0.5;
+  return Math.min(cwpm, Math.max(MIN_EWPM, next));
+}

@@ -4,16 +4,18 @@ import type { CharStat } from "../training/stats";
 export interface Attempt {
   id?: number;
   ts: number;
-  mode: "single";
+  mode: "single" | "group";
   target: string;
-  /** 入力した文字。時間切れなら null */
+  /** 入力した文字。時間切れ・不明なら null */
   answer: string | null;
   /** 文字が合っていれば true（目標時間を過ぎていても） */
   correct: boolean;
-  /** 反応時間（ミリ秒）。時間切れなら null */
+  /** 反応時間（ミリ秒）。単字即答のみ。時間切れなら null */
   rtMs: number | null;
-  /** 出題時の目標時間（ミリ秒） */
-  limitMs: number;
+  /** 出題時の目標時間（ミリ秒）。単字即答のみ */
+  limitMs?: number;
+  /** 実効速度（WPM）。グループ受信のみ */
+  ewpm?: number;
   cwpm: number;
   freq: number;
 }
@@ -64,10 +66,14 @@ export async function loadCharStats(): Promise<Map<string, CharStat>> {
 }
 
 /** 解答の記録と文字の成績を同じトランザクションで保存する */
-export async function saveAttempt(attempt: Attempt, stat: CharStat): Promise<void> {
+export async function saveAttempts(attempts: Attempt[], stats: CharStat[]): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(["attempts", "charStats"], "readwrite");
-  tx.objectStore("attempts").add(attempt);
-  tx.objectStore("charStats").put(stat);
+  for (const a of attempts) tx.objectStore("attempts").add(a);
+  for (const s of stats) tx.objectStore("charStats").put(s);
   await done(tx);
+}
+
+export function saveAttempt(attempt: Attempt, stat: CharStat): Promise<void> {
+  return saveAttempts([attempt], [stat]);
 }

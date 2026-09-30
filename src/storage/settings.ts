@@ -12,8 +12,14 @@ export interface Settings {
   limitMs: number;
   /** 目標時間を自動で調整するか */
   autoLimit: boolean;
-  /** 1 セッションの問題数 */
+  /** 単字即答の 1 セッションの問題数 */
   questions: number;
+  /** グループ受信の実効速度（WPM）。autoEwpm なら練習結果に応じて自動で変わる */
+  ewpm: number;
+  /** 実効速度を自動で調整するか */
+  autoEwpm: boolean;
+  /** グループ受信の 1 セッションのグループ数 */
+  groups: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -24,6 +30,9 @@ export const DEFAULT_SETTINGS: Settings = {
   limitMs: 3000,
   autoLimit: true,
   questions: 50,
+  ewpm: 5,
+  autoEwpm: true,
+  groups: 10,
 };
 
 const KEY = "morse_one.settings";
