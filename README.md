@@ -2,6 +2,8 @@
 
 iPhone 向けモールス符号（欧文）受信練習 PWA。計画は [docs/PLAN.md](docs/PLAN.md) を参照。
 
+公開先: https://r-ddo.github.io/morse_one/ （iPhone の Safari で開き、共有 →「ホーム画面に追加」）
+
 ## 開発
 
 ```sh
