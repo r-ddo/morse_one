@@ -9,6 +9,7 @@
   --accent: #2f6fdf;
   --ok: #1f8a4c;
   --ng: #c93a3a;
+  --slow: #b7860b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,6 +22,7 @@
     --accent: #5b8ff0;
     --ok: #4cc27f;
     --ng: #ef6b6b;
+  --slow: #e3b341;
   }
 }
 
@@ -162,6 +164,10 @@ button.small {
 
 .display.ng {
   color: var(--ng);
+}
+
+.display.slow {
+  color: var(--slow);
 }
 
 .detail {

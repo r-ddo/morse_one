@@ -4,7 +4,7 @@ import { farnsworth } from "../audio/timing";
 import { saveAttempt } from "../storage/db";
 import { saveSettings, type Settings } from "../storage/settings";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
-import { SingleDrill, type DrillSummary } from "../training/singleDrill";
+import { SingleDrill, type DrillResult, type DrillSummary, type Verdict } from "../training/singleDrill";
 import { weakness, type CharStat } from "../training/stats";
 import { h, prettyCode } from "./dom";
 import { createKeyboard } from "./keyboard";
@@ -61,10 +61,13 @@ export class App {
         String(s.cwpm),
         (v) => update({ cwpm: Number(v) }),
       )),
-      field("制限時間", select(
-        [2000, 1500, 1200, 1000, 800, 700, 600, 500].map((v) => [String(v), `${(v / 1000).toFixed(1)} 秒`]),
-        String(s.limitMs),
-        (v) => update({ limitMs: Number(v) }),
+      field("目標時間", select(
+        [
+          ["auto", `自動（現在 ${sec(s.limitMs)}）`],
+          ...[5000, 3000, 2000, 1500, 1000, 700, 500].map((v): [string, string] => [String(v), sec(v)]),
+        ],
+        s.autoLimit ? "auto" : String(s.limitMs),
+        (v) => update(v === "auto" ? { autoLimit: true } : { autoLimit: false, limitMs: Number(v) }),
       )),
       field("問題数", select(
         [20, 30, 50, 100].map((v) => [String(v), `${v} 問`]),
@@ -110,21 +113,25 @@ export class App {
       onEvent: (e) => {
         switch (e.type) {
           case "question":
-            progress.textContent = `${e.index + 1} / ${e.total}`;
+            progress.textContent = `${e.index + 1} / ${e.total}　目標 ${sec(e.limitMs)}`;
             display.className = "display listening";
             display.textContent = "?";
             detail.textContent = "";
             break;
           case "result": {
-            display.className = `display ${e.correct ? "ok" : "ng"}`;
+            display.className = `display ${VERDICT_CLASS[e.verdict]}`;
             display.textContent = e.target;
-            const rt = e.rtMs === null ? "時間切れ" : `${e.rtMs} ms`;
+            const rt = e.rtMs === null ? "時間切れ" : e.verdict === "slow" ? `${e.rtMs} ms（遅い）` : `${e.rtMs} ms`;
             detail.replaceChildren(h("div", {}, `${prettyCode(MORSE[e.target])}　${rt}`));
             if (e.answer && e.answer !== e.target) {
               detail.append(h("div", { class: "yours" }, `あなたの答え ${e.answer}　${prettyCode(MORSE[e.answer])}`));
             }
             break;
           }
+          case "limit":
+            this.settings = { ...this.settings, limitMs: e.limitMs };
+            saveSettings(this.settings);
+            break;
           case "finished":
             this.drill = null;
             this.showResult(e.summary);
@@ -143,24 +150,26 @@ export class App {
 
   private showResult(summary: DrillSummary): void {
     const total = summary.results.length;
-    const misses = new Map<string, number>();
-    for (const r of summary.results) {
-      if (!r.correct) misses.set(r.target, (misses.get(r.target) ?? 0) + 1);
-    }
-    const missList = [...misses.entries()].sort((a, b) => b[1] - a[1]);
+    const misses = countBy(summary.results.filter((r) => r.verdict === "wrong" || r.verdict === "timeout"));
+    const slows = countBy(summary.results.filter((r) => r.verdict === "slow"));
+    const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
+    const chips = (title: string, list: [string, number][]) =>
+      list.length > 0 &&
+      h("div", { class: "misses" },
+        h("h2", {}, title),
+        ...list.map(([c, n]) => h("span", { class: "chip" }, `${c} ×${n}`)),
+      );
 
     this.render(
       h("h1", {}, "結果"),
       h("div", { class: "summary" },
-        h("div", {}, `正答 ${summary.correct} / ${total}（${Math.round((summary.correct / total) * 100)}%）`),
+        h("div", {}, `正解 ${summary.correct} / ${total}（${pct(summary.correct)}）`),
+        h("div", {}, `目標時間内 ${summary.fast} / ${total}（${pct(summary.fast)}）`),
         h("div", {}, `平均反応時間 ${summary.avgRtMs === null ? "―" : `${summary.avgRtMs} ms`}`),
+        h("div", {}, `次回の目標時間 ${sec(summary.limitMs)}`),
       ),
-      missList.length > 0
-        ? h("div", { class: "misses" },
-            h("h2", {}, "間違えた文字"),
-            ...missList.map(([c, n]) => h("span", { class: "chip" }, `${c} ×${n}`)),
-          )
-        : h("p", {}, "全問正解！"),
+      chips("間違えた文字", misses),
+      chips("遅かった文字", slows),
       h("div", { class: "row" },
         h("button", { class: "primary", type: "button", onclick: () => void this.startDrill() }, "もう一度"),
         h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
@@ -195,9 +204,22 @@ export class App {
     );
   }
 
-  private render(...children: Node[]): void {
-    this.root.replaceChildren(...children);
+  private render(...children: (Node | null | false)[]): void {
+    this.root.replaceChildren(...children.filter((c): c is Node => !!c));
   }
+}
+
+const VERDICT_CLASS: Record<Verdict, string> = { fast: "ok", slow: "slow", wrong: "ng", timeout: "ng" };
+
+function sec(ms: number): string {
+  return `${(ms / 1000).toFixed(ms % 100 === 0 ? 1 : 2)} 秒`;
+}
+
+/** 文字ごとの回数を多い順に */
+function countBy(results: DrillResult[]): [string, number][] {
+  const m = new Map<string, number>();
+  for (const r of results) m.set(r.target, (m.get(r.target) ?? 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
 function field(label: string, control: HTMLElement): HTMLElement {

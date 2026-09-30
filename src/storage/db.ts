@@ -8,9 +8,11 @@ export interface Attempt {
   target: string;
   /** 入力した文字。時間切れなら null */
   answer: string | null;
+  /** 文字が合っていれば true（目標時間を過ぎていても） */
   correct: boolean;
   /** 反応時間（ミリ秒）。時間切れなら null */
   rtMs: number | null;
+  /** 出題時の目標時間（ミリ秒） */
   limitMs: number;
   cwpm: number;
   freq: number;
