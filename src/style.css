@@ -355,3 +355,67 @@ table.stats td.char {
   border-color: var(--accent);
   color: #fff;
 }
+
+.badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--slow);
+  color: #000;
+  font-size: 0.8rem;
+}
+
+.pairs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button.pair {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  text-align: left;
+  padding: 12px 16px;
+  font-weight: normal;
+}
+
+.pair-chars {
+  font-size: 1.2rem;
+  font-weight: 700;
+  min-width: 3.5em;
+}
+
+.pair-codes {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.pair-note {
+  opacity: 0.8;
+  font-size: 0.9rem;
+}
+
+.choices {
+  margin-top: auto;
+  display: flex;
+  gap: 12px;
+}
+
+button.choice {
+  flex: 1;
+  height: 160px;
+  font-size: 3rem;
+  font-weight: 700;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button.choice:disabled {
+  opacity: 0.5;
+}
+
+.detail.concealed {
+  visibility: hidden;
+}

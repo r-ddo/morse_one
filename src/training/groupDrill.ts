@@ -4,7 +4,8 @@ import type { Attempt } from "../storage/db";
 import type { Settings } from "../storage/settings";
 import { adaptEwpm, EWPM_WINDOW } from "./adaptive";
 import { charsetChars } from "./charset";
-import { pickChar } from "./picker";
+import type { ConfusionTracker } from "./confusion";
+import { pickChar, shuffle } from "./picker";
 import { newStat, updateStat, type CharStat } from "./stats";
 
 export const GROUP_LEN = 5;
@@ -40,6 +41,7 @@ export interface GroupDeps {
   player: MorsePlayer;
   settings: Settings;
   stats: Map<string, CharStat>;
+  confusions: ConfusionTracker;
   save: (attempts: Attempt[], stats: CharStat[]) => Promise<void>;
   onEvent: (e: GroupEvent) => void;
 }
@@ -67,6 +69,8 @@ export class GroupDrill {
   private reviewing = false;
   private aborted = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** 直前のグループで取り違え・聞き逃した文字。次のグループに混ぜる */
+  private followUps: string[] = [];
 
   constructor(private readonly deps: GroupDeps) {
     this.chars = charsetChars(deps.settings.charset);
@@ -145,14 +149,21 @@ export class GroupDrill {
       return;
     }
 
-    let target = "";
+    const picked: string[] = [];
     for (let i = 0; i < GROUP_LEN; i++) {
-      target += pickChar(this.chars, stats, {
-        limitMs: settings.limitMs,
-        now: Date.now(),
-        exclude: target.at(-1),
-      });
+      picked.push(
+        pickChar(this.chars, stats, {
+          limitMs: settings.limitMs,
+          now: Date.now(),
+          exclude: picked.at(-1),
+        }),
+      );
     }
+    // 復習する文字をランダムな位置に入れる
+    const positions = shuffle([...picked.keys()]);
+    this.followUps.forEach((c, i) => (picked[positions[i]] = c));
+    this.followUps = [];
+    const target = picked.join("");
     this.target = target;
     this.typed = "";
     this.submitted = false;
@@ -179,6 +190,7 @@ export class GroupDrill {
     const { settings, stats, save, onEvent } = this.deps;
     const marks = gradeGroup(this.target, this.typed);
     const ts = Date.now();
+    this.queueFollowUps(marks, ts);
     const attempts: Attempt[] = [];
     const updated = new Map<string, CharStat>();
     [...this.target].forEach((c, i) => {
@@ -206,6 +218,25 @@ export class GroupDrill {
 
     // 全問正解なら自動で次へ。間違いがあれば次へ進む操作を待つ
     if (marks.every(Boolean)) this.timer = setTimeout(() => this.next(), NEXT_DELAY);
+  }
+
+  /**
+   * 取り違えがあれば最初の組み合わせの 2 文字を、なければ聞き逃した文字を最大 2 つ、
+   * 次のグループに入れる
+   */
+  private queueFollowUps(marks: boolean[], ts: number): void {
+    const missed: string[] = [];
+    let pair: string[] | null = null;
+    marks.forEach((ok, i) => {
+      if (ok) return;
+      const target = this.target[i];
+      const typed = this.typed[i];
+      missed.push(target);
+      if (typed === UNKNOWN) return;
+      this.deps.confusions.add(target, typed, ts);
+      if (!pair && this.chars.includes(typed)) pair = [target, typed];
+    });
+    this.followUps = pair ?? [...new Set(missed)].slice(0, 2);
   }
 
   /** EWPM_WINDOW グループごとに実効速度を見直す */

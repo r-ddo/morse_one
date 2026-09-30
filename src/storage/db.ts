@@ -1,16 +1,17 @@
+import { ConfusionTracker } from "../training/confusion";
 import type { CharStat } from "../training/stats";
 
 /** 1 回の解答の記録 */
 export interface Attempt {
   id?: number;
   ts: number;
-  mode: "single" | "group";
+  mode: "single" | "group" | "contrast";
   target: string;
   /** 入力した文字。時間切れ・不明なら null */
   answer: string | null;
   /** 文字が合っていれば true（目標時間を過ぎていても） */
   correct: boolean;
-  /** 反応時間（ミリ秒）。単字即答のみ。時間切れなら null */
+  /** 反応時間（ミリ秒）。単字即答・聞き分けのみ。時間切れなら null */
   rtMs: number | null;
   /** 出題時の目標時間（ミリ秒）。単字即答のみ */
   limitMs?: number;
@@ -76,4 +77,17 @@ export async function saveAttempts(attempts: Attempt[], stats: CharStat[]): Prom
 
 export function saveAttempt(attempt: Attempt, stat: CharStat): Promise<void> {
   return saveAttempts([attempt], [stat]);
+}
+
+/** 単字即答・グループ受信の誤答から取り違えを集計する（聞き分け練習の 2 択は含めない） */
+export async function loadConfusions(): Promise<ConfusionTracker> {
+  const db = await openDb();
+  const tx = db.transaction("attempts", "readonly");
+  const req = tx.objectStore("attempts").getAll();
+  await done(tx);
+  const tracker = new ConfusionTracker();
+  for (const a of req.result as Attempt[]) {
+    if (a.mode !== "contrast" && a.answer !== null && !a.correct) tracker.add(a.target, a.answer, a.ts);
+  }
+  return tracker;
 }

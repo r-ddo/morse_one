@@ -5,7 +5,8 @@ import type { Attempt } from "../storage/db";
 import type { Settings } from "../storage/settings";
 import { ADAPT_WINDOW, adaptLimit, giveUpMs } from "./adaptive";
 import { charsetChars } from "./charset";
-import { pickChar } from "./picker";
+import type { ConfusionTracker } from "./confusion";
+import { pickChar, shuffle } from "./picker";
 import { newStat, updateStat, type CharStat } from "./stats";
 
 /** fast: 目標時間内に正解 / slow: 目標時間を過ぎて正解 / wrong: 誤答 / timeout: 打ち切り */
@@ -33,7 +34,8 @@ export interface DrillSummary {
 }
 
 export type DrillEvent =
-  | { type: "question"; index: number; total: number; limitMs: number }
+  /** followUp: 直前の誤答を受けた復習問題 */
+  | { type: "question"; index: number; total: number; limitMs: number; followUp: boolean }
   | ({ type: "result"; index: number; total: number } & DrillResult)
   | { type: "limit"; limitMs: number }
   /** 答え合わせの音を再生中（target: 正解の符号 / answer: 自分の答えの符号 / null: 再生終了） */
@@ -45,6 +47,7 @@ export interface DrillDeps {
   settings: Settings;
   /** 文字ごとの成績。解答のたびに更新される */
   stats: Map<string, CharStat>;
+  confusions: ConfusionTracker;
   save: (attempt: Attempt, stat: CharStat) => Promise<void>;
   onEvent: (e: DrillEvent) => void;
 }
@@ -67,6 +70,9 @@ export class SingleDrill {
   private accepting = false;
   private aborted = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** 誤答した文字と取り違えた文字の復習問題。通常の問題と交互に出す */
+  private followUps: string[] = [];
+  private followUpTurn = false;
 
   constructor(private readonly deps: DrillDeps) {
     this.chars = charsetChars(deps.settings.charset);
@@ -106,12 +112,21 @@ export class SingleDrill {
       return;
     }
 
-    this.target = pickChar(this.chars, stats, {
+    const followUp = this.takeFollowUp();
+    this.target =
+      followUp ??
+      pickChar(this.chars, stats, {
+        limitMs: this.limitMs,
+        now: Date.now(),
+        exclude: this.target,
+      });
+    onEvent({
+      type: "question",
+      index: this.index,
+      total: settings.questions,
       limitMs: this.limitMs,
-      now: Date.now(),
-      exclude: this.target,
+      followUp: followUp !== null,
     });
-    onEvent({ type: "question", index: this.index, total: settings.questions, limitMs: this.limitMs });
 
     const pb = player.play(this.target, this.timing, this.tone);
     this.endPerf = pb.endPerf;
@@ -132,6 +147,7 @@ export class SingleDrill {
     const verdict: Verdict =
       answer === null ? "timeout" : !correct ? "wrong" : rtMs! <= limitMs ? "fast" : "slow";
     const ts = Date.now();
+    if (verdict === "wrong" || verdict === "timeout") this.queueFollowUps(answer, ts);
 
     const stat = updateStat(stats.get(this.target) ?? newStat(this.target), { correct, rtMs, ts });
     stats.set(this.target, stat);
@@ -179,6 +195,25 @@ export class SingleDrill {
     this.index++;
     this.adapt();
     this.next();
+  }
+
+  /** 誤答した文字（と取り違えた文字）をこのあと交互に出す */
+  private queueFollowUps(answer: string | null, ts: number): void {
+    const target = this.target;
+    if (answer !== null && answer !== target) this.deps.confusions.add(target, answer, ts);
+    const pair = answer !== null && answer !== target && this.chars.includes(answer);
+    this.followUps = shuffle(pair ? [target, answer, target, answer] : [target, target]);
+    this.followUpTurn = false;
+  }
+
+  /** 復習問題の番なら取り出す。直前と同じ文字は避ける */
+  private takeFollowUp(): string | null {
+    const turn = this.followUpTurn;
+    this.followUpTurn = !turn;
+    if (!turn) return null;
+    const i = this.followUps.findIndex((c) => c !== this.target);
+    if (i < 0) return null;
+    return this.followUps.splice(i, 1)[0];
   }
 
   /** ADAPT_WINDOW 問ごとに目標時間を見直す */

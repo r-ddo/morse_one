@@ -4,6 +4,8 @@ import { farnsworth } from "../audio/timing";
 import { saveAttempt, saveAttempts } from "../storage/db";
 import { saveSettings, type Settings } from "../storage/settings";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
+import { COMMON_PAIRS, type ConfusionTracker } from "../training/confusion";
+import { ContrastDrill, type ContrastSummary } from "../training/contrastDrill";
 import { GroupDrill, UNKNOWN, type GroupSummary } from "../training/groupDrill";
 import { SingleDrill, type DrillResult, type DrillSummary, type Verdict } from "../training/singleDrill";
 import { weakness, type CharStat } from "../training/stats";
@@ -25,6 +27,7 @@ export class App {
     private readonly root: HTMLElement,
     private settings: Settings,
     private readonly stats: Map<string, CharStat>,
+    private readonly confusions: ConfusionTracker,
   ) {
     document.addEventListener("keydown", (e) => {
       if (!this.active || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -44,6 +47,7 @@ export class App {
       this.settingsForm(),
       h("div", { class: "row" },
         h("button", { type: "button", onclick: () => void this.testTone() }, "試聴"),
+        h("button", { type: "button", onclick: () => this.showContrastMenu() }, "聞き分け練習"),
         h("button", { type: "button", onclick: () => this.showStats() }, "成績"),
       ),
     );
@@ -127,11 +131,15 @@ export class App {
       player: this.player,
       settings: this.settings,
       stats: this.stats,
+      confusions: this.confusions,
       save: saveAttempt,
       onEvent: (e) => {
         switch (e.type) {
           case "question":
-            progress.textContent = `${e.index + 1} / ${e.total}　目標 ${sec(e.limitMs)}`;
+            progress.replaceChildren(
+              `${e.index + 1} / ${e.total}　目標 ${sec(e.limitMs)}`,
+              e.followUp ? h("span", { class: "badge" }, "復習") : "",
+            );
             display.className = "display listening";
             display.textContent = "?";
             detail.textContent = "";
@@ -215,6 +223,7 @@ export class App {
       player: this.player,
       settings: this.settings,
       stats: this.stats,
+      confusions: this.confusions,
       save: saveAttempts,
       onEvent: (e) => {
         switch (e.type) {
@@ -344,9 +353,144 @@ export class App {
     );
   }
 
+  private showContrastMenu(): void {
+    const recent = this.confusions.top(6, Date.now());
+    const seen = new Set(recent.map((p) => p.a + p.b));
+    const common = COMMON_PAIRS.filter(([a, b]) => !seen.has(a < b ? a + b : b + a));
+    const pairButton = (a: string, b: string, note: string, primary: boolean) =>
+      h("button", { type: "button", class: primary ? "pair primary" : "pair", onclick: () => void this.startContrast([a, b]) },
+        h("span", { class: "pair-chars" }, `${a} / ${b}`),
+        h("span", { class: "pair-codes" }, `${prettyCode(MORSE[a])}　${prettyCode(MORSE[b])}`),
+        note ? h("span", { class: "pair-note" }, note) : "",
+      );
+
+    this.render(
+      h("h1", {}, "聞き分け練習"),
+      h("p", { class: "note" }, "取り違えやすい 2 文字だけを出題します。聞こえた方を選んでください"),
+      recent.length > 0
+        ? h("div", { class: "pairs" },
+            h("h2", {}, "あなたの取り違え"),
+            ...recent.map((p, i) => pairButton(p.a, p.b, `${p.count} 回`, i === 0)),
+          )
+        : h("p", {}, "まだ取り違えの記録がありません。単字即答やグループ受信で間違えると、ここに表示されます"),
+      h("div", { class: "pairs" },
+        h("h2", {}, "よくある組み合わせ"),
+        ...common.map(([a, b]) => pairButton(a, b, "", false)),
+      ),
+      h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
+    );
+  }
+
+  private async startContrast(pair: [string, string]): Promise<void> {
+    await this.player.unlock();
+
+    const progress = h("div", { class: "progress" });
+    const display = h("div", { class: "display listening" }, "");
+    const status = h("div", { class: "status" }, "まず 2 つの符号を聞きます");
+    const lines = pair.map((c) =>
+      h("div", { class: "code-line", dataset: { which: c } }, `${c}　${prettyCode(MORSE[c])}`));
+    const choices = pair.map((c) => {
+      // 符号を見て数える癖がつかないよう、ボタンには文字だけを出す
+      const b = h("button", { type: "button", class: "choice", disabled: true }, c);
+      b.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        drill.input(c);
+      });
+      return b;
+    });
+    const detail = h("div", { class: "detail" }, ...lines);
+    const highlight = (which: string | null) =>
+      lines.forEach((l) => l.classList.toggle("playing", l.dataset.which === which));
+
+    this.render(
+      h("div", { class: "drill" },
+        h("div", { class: "row" },
+          progress,
+          h("button", { type: "button", class: "small", onclick: () => this.stopDrill() }, "中断"),
+        ),
+        display,
+        detail,
+        status,
+        h("div", { class: "choices" }, ...choices),
+      ),
+    );
+
+    const drill = new ContrastDrill({
+      player: this.player,
+      settings: this.settings,
+      pair,
+      questions: 20,
+      save: (a) => saveAttempts([a], []),
+      onEvent: (e) => {
+        switch (e.type) {
+          case "intro":
+            highlight(e.which);
+            break;
+          case "question":
+            progress.textContent = `${e.index + 1} / ${e.total}`;
+            display.className = "display listening";
+            display.textContent = "?";
+            status.textContent = "聞こえた方を選んでください";
+            detail.classList.add("concealed");
+            choices.forEach((b) => (b.disabled = false));
+            break;
+          case "result":
+            display.className = `display ${e.correct ? "ok" : "ng"}`;
+            display.textContent = e.target;
+            status.textContent = e.correct ? `${e.rtMs} ms` : `不正解（あなたの答え ${e.answer}）`;
+            detail.classList.remove("concealed");
+            choices.forEach((b) => (b.disabled = true));
+            break;
+          case "replay":
+            highlight(e.which);
+            break;
+          case "finished":
+            this.active = null;
+            this.showContrastResult(e.summary);
+            break;
+        }
+      },
+    });
+    this.active = {
+      key: (e) => {
+        const ch = e.key.toUpperCase();
+        if (!pair.includes(ch)) return false;
+        drill.input(ch);
+        return true;
+      },
+      abort: () => drill.abort(),
+    };
+    void drill.start();
+  }
+
+  private showContrastResult(summary: ContrastSummary): void {
+    const [a, b] = summary.pair;
+    const total = summary.results.length;
+    const rowFor = (c: string) => {
+      const rs = summary.results.filter((r) => r.target === c);
+      const ok = rs.filter((r) => r.correct).length;
+      return h("div", {}, `${c}（${prettyCode(MORSE[c])}）: ${ok} / ${rs.length}`);
+    };
+    this.render(
+      h("h1", {}, `結果 ${a} / ${b}`),
+      h("div", { class: "summary" },
+        h("div", {}, `正解 ${summary.correct} / ${total}（${Math.round((summary.correct / total) * 100)}%）`),
+        h("div", {}, `平均反応時間 ${summary.avgRtMs === null ? "―" : `${summary.avgRtMs} ms`}`),
+        rowFor(a),
+        rowFor(b),
+      ),
+      h("div", { class: "row" },
+        h("button", { class: "primary", type: "button", onclick: () => void this.startContrast(summary.pair) }, "もう一度"),
+        h("button", { type: "button", onclick: () => this.showContrastMenu() }, "組み合わせを選ぶ"),
+      ),
+      h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
+    );
+  }
+
   private showStats(): void {
     const now = Date.now();
     const { limitMs } = this.settings;
+    const confusions = this.confusions.top(10, now);
     const rows = charsetChars(this.settings.charset)
       .map((c) => ({ c, s: this.stats.get(c), w: weakness(this.stats.get(c), limitMs, now) }))
       .sort((a, b) => b.w - a.w);
@@ -367,6 +511,11 @@ export class App {
           h("td", {}, w.toFixed(2)),
         ))),
       ),
+      confusions.length > 0 &&
+        h("div", { class: "misses" },
+          h("h2", {}, "取り違え（最近のものほど上位）"),
+          ...confusions.map((p) => h("span", { class: "chip" }, `${p.a} / ${p.b} ×${p.count}`)),
+        ),
       h("button", { type: "button", onclick: () => this.showHome() }, "ホーム"),
     );
   }
