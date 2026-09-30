@@ -8,6 +8,7 @@ iPhone 向けモールス符号（欧文）受信練習 PWA。計画は [docs/PL
 npm install
 npm run dev      # 同じ Wi-Fi の iPhone から表示された Network URL で確認
 npm run build
+npm test         # 単体テスト
 ```
 
 ## 公開
