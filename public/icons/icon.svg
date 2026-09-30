@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#121212"/>
+  <!-- 「·−」（A）。マスカブルアイコンの安全領域（中央 80%）に収める -->
+  <circle cx="170" cy="256" r="38" fill="#5b8ff0"/>
+  <rect x="244" y="218" width="136" height="76" rx="38" fill="#5b8ff0"/>
+</svg>

@@ -102,7 +102,7 @@ iPhone で空き時間に使える、モールス符号（欧文）受信練習�
 | ホスティング | GitHub Pages（静的ホスティング、HTTPS。push で自動公開） |
 | 設定の保存 | localStorage |
 | 履歴・統計の保存 | IndexedDB（端末内のみ。サーバーには送らない） |
-| オフライン | Service Worker |
+| オフライン | Service Worker（vite-plugin-pwa。更新は「新しいバージョンがあります [更新]」で利用者が選ぶ） |
 
 ### データ保存の注意点
 - Safari とホーム画面アプリは保存領域が別 → 常にホーム画面から使う
