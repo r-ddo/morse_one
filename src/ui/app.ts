@@ -10,18 +10,16 @@ import { GroupDrill, UNKNOWN, type GroupSummary } from "../training/groupDrill";
 import { SingleDrill, type DrillResult, type DrillSummary, type Verdict } from "../training/singleDrill";
 import { weakness, type CharStat } from "../training/stats";
 import { h, prettyCode } from "./dom";
+import { field, range, sec, select, wpm } from "./form";
+import type { ActiveDrill, ScreenContext } from "./context";
 import { createKeyboard } from "./keyboard";
-
-/** 実行中の練習。物理キーボードの入力を受け取る */
-interface ActiveDrill {
-  /** 処理したキーなら true */
-  key(e: KeyboardEvent): boolean;
-  abort(): void;
-}
+import { showMockMenu } from "./mockScreen";
+import { showStreamMenu } from "./streamScreen";
 
 export class App {
   private readonly player = new MorsePlayer();
   private active: ActiveDrill | null = null;
+  private readonly ctx: ScreenContext;
 
   constructor(
     private readonly root: HTMLElement,
@@ -29,6 +27,23 @@ export class App {
     private readonly stats: Map<string, CharStat>,
     private readonly confusions: ConfusionTracker,
   ) {
+    const app = this;
+    this.ctx = {
+      player: this.player,
+      get settings() {
+        return app.settings;
+      },
+      updateSettings: (patch) => {
+        this.settings = { ...this.settings, ...patch };
+        saveSettings(this.settings);
+      },
+      stats,
+      confusions,
+      render: (...children) => this.render(...children),
+      setActive: (active) => (this.active = active),
+      stopDrill: () => this.stopDrill(),
+      showHome: () => this.showHome(),
+    };
     document.addEventListener("keydown", (e) => {
       if (!this.active || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
@@ -44,6 +59,8 @@ export class App {
       h("h1", {}, "morse_one"),
       h("button", { class: "primary", type: "button", onclick: () => void this.startDrill() }, "単字即答をはじめる"),
       h("button", { class: "primary", type: "button", onclick: () => void this.startGroupDrill() }, "5文字グループをはじめる"),
+      h("button", { class: "primary", type: "button", onclick: () => showStreamMenu(this.ctx) }, "遅れ受信"),
+      h("button", { class: "primary", type: "button", onclick: () => void showMockMenu(this.ctx) }, "模擬試験（紙に書き取り）"),
       this.settingsForm(),
       h("div", { class: "row" },
         h("button", { type: "button", onclick: () => void this.testTone() }, "試聴"),
@@ -55,10 +72,7 @@ export class App {
 
   private settingsForm(): HTMLElement {
     const s = this.settings;
-    const update = (patch: Partial<Settings>) => {
-      this.settings = { ...this.settings, ...patch };
-      saveSettings(this.settings);
-    };
+    const update = (patch: Partial<Settings>) => this.ctx.updateSettings(patch);
     return h("div", { class: "settings" },
       field("文字セット", select(
         Object.entries(CHARSET_LABELS).map(([v, l]) => [v, l]),
@@ -229,7 +243,7 @@ export class App {
         switch (e.type) {
           case "group":
             progress.textContent = `${e.index + 1} / ${e.total}`;
-            speed.textContent = `実効 ${wpm(e.ewpm)}（文字間 ${e.charGapSec.toFixed(2)} 秒）`;
+            speed.textContent = `実効 ${wpm(e.ewpm)} ≒ ${Math.round(e.cpm)} 字/分（文字間 ${e.charGapSec.toFixed(2)} 秒）`;
             for (const a of answer) {
               a.textContent = "";
               a.className = "slot answer";
@@ -527,46 +541,9 @@ export class App {
 
 const VERDICT_CLASS: Record<Verdict, string> = { fast: "ok", slow: "slow", wrong: "ng", timeout: "ng" };
 
-function wpm(v: number): string {
-  return `${Number.isInteger(v) ? v : v.toFixed(1)} WPM`;
-}
-
-function sec(ms: number): string {
-  return `${(ms / 1000).toFixed(ms % 100 === 0 ? 1 : 2)} 秒`;
-}
-
 /** 文字ごとの回数を多い順に */
 function countBy(results: DrillResult[]): [string, number][] {
   const m = new Map<string, number>();
   for (const r of results) m.set(r.target, (m.get(r.target) ?? 0) + 1);
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-function field(label: string, control: HTMLElement): HTMLElement {
-  return h("label", { class: "field" }, h("span", {}, label), control);
-}
-
-function select(options: [string, string][], value: string, onChange: (v: string) => void): HTMLSelectElement {
-  const el = h("select", {}, ...options.map(([v, l]) => h("option", { value: v, textContent: l })));
-  el.value = value;
-  el.addEventListener("change", () => onChange(el.value));
-  return el;
-}
-
-function range(
-  min: number,
-  max: number,
-  step: number,
-  value: number,
-  format: (v: number) => string,
-  onChange: (v: number) => void,
-): HTMLElement {
-  const out = h("span", { class: "range-value", textContent: format(value) });
-  const input = h("input", { type: "range", min: String(min), max: String(max), step: String(step) });
-  input.value = String(value);
-  input.addEventListener("input", () => {
-    out.textContent = format(Number(input.value));
-    onChange(Number(input.value));
-  });
-  return h("span", { class: "range" }, input, out);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toIntervals } from "./player";
+import { charEndTimes, toIntervals } from "./player";
 
 const timing = { dot: 1, charGap: 3, wordGap: 7 };
 
@@ -15,5 +15,12 @@ describe("toIntervals", () => {
 
   it("ignores lowercase differences and unknown characters", () => {
     expect(toIntervals("e#", timing)).toEqual([[0, 1]]);
+  });
+});
+
+describe("charEndTimes", () => {
+  it("returns when each non-space character finishes", () => {
+    // A: 0-1, 2-5 / 語間 7 / E: 12-13
+    expect(charEndTimes("A E", timing)).toEqual([5, 13]);
   });
 });

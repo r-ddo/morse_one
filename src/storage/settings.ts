@@ -20,6 +20,18 @@ export interface Settings {
   autoEwpm: boolean;
   /** グループ受信の 1 セッションのグループ数 */
   groups: number;
+  /** 遅れ受信の速度（字/分）。autoStreamCpm なら練習結果に応じて自動で変わる */
+  streamCpm: number;
+  /** 遅れ受信の速度を自動で調整するか */
+  autoStreamCpm: boolean;
+  /** 遅れ受信の 1 セッションのグループ数 */
+  streamGroups: number;
+  /** 遅れ受信で許容する遅れ（字） */
+  allowedLag: number;
+  /** 模擬試験の速度（字/分） */
+  mockCpm: number;
+  /** 模擬試験の長さ（分） */
+  mockMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +45,12 @@ export const DEFAULT_SETTINGS: Settings = {
   ewpm: 5,
   autoEwpm: true,
   groups: 10,
+  streamCpm: 30,
+  autoStreamCpm: true,
+  streamGroups: 10,
+  allowedLag: 1,
+  mockCpm: 40,
+  mockMinutes: 3,
 };
 
 const KEY = "morse_one.settings";

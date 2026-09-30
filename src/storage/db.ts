@@ -5,7 +5,7 @@ import type { CharStat } from "../training/stats";
 export interface Attempt {
   id?: number;
   ts: number;
-  mode: "single" | "group" | "contrast";
+  mode: "single" | "group" | "contrast" | "stream";
   target: string;
   /** 入力した文字。時間切れ・不明なら null */
   answer: string | null;
@@ -17,23 +17,30 @@ export interface Attempt {
   limitMs?: number;
   /** 実効速度（WPM）。グループ受信のみ */
   ewpm?: number;
+  /** 速度（字/分）。遅れ受信のみ */
+  cpm?: number;
   cwpm: number;
   freq: number;
 }
 
 const DB_NAME = "morse_one";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
   dbPromise ??= new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (e) => {
       const db = req.result;
-      const attempts = db.createObjectStore("attempts", { keyPath: "id", autoIncrement: true });
-      attempts.createIndex("ts", "ts");
-      db.createObjectStore("charStats", { keyPath: "char" });
+      if (e.oldVersion < 1) {
+        const attempts = db.createObjectStore("attempts", { keyPath: "id", autoIncrement: true });
+        attempts.createIndex("ts", "ts");
+        db.createObjectStore("charStats", { keyPath: "char" });
+      }
+      if (e.oldVersion < 2) {
+        db.createObjectStore("mocks", { keyPath: "id", autoIncrement: true });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -90,4 +97,37 @@ export async function loadConfusions(): Promise<ConfusionTracker> {
     if (a.mode !== "contrast" && a.answer !== null && !a.correct) tracker.add(a.target, a.answer, a.ts);
   }
   return tracker;
+}
+
+/** 模擬試験（紙に書き取って自己採点）の結果 */
+export interface MockResult {
+  id?: number;
+  ts: number;
+  /** 速度（字/分） */
+  cpm: number;
+  minutes: number;
+  chars: number;
+  charset: string;
+  wrong: number;
+  missing: number;
+  extra: number;
+  /** 抹消・訂正の数 */
+  corrections: number;
+  score: number;
+}
+
+export async function saveMock(result: MockResult): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction("mocks", "readwrite");
+  tx.objectStore("mocks").add(result);
+  await done(tx);
+}
+
+/** 新しい順 */
+export async function loadMocks(): Promise<MockResult[]> {
+  const db = await openDb();
+  const tx = db.transaction("mocks", "readonly");
+  const req = tx.objectStore("mocks").getAll();
+  await done(tx);
+  return (req.result as MockResult[]).sort((a, b) => b.ts - a.ts);
 }

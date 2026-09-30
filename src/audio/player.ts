@@ -11,6 +11,8 @@ export interface ToneOptions {
 export interface Playback {
   /** 最後の符号が鳴り終わる時刻（performance.now() 基準、ミリ秒） */
   endPerf: number;
+  /** 最初の符号が鳴り始める時刻（performance.now() 基準、ミリ秒） */
+  startPerf: number;
   /** 再生終了（または stop）で解決する */
   done: Promise<void>;
 }
@@ -26,7 +28,17 @@ interface AudioSessionNavigator {
 
 /** 文字列を [開始, 終了] の発音区間（秒、先頭 0 基準）に変換する。空白は語間 */
 export function toIntervals(text: string, timing: Timing): [number, number][] {
+  return layout(text, timing).intervals;
+}
+
+/** 空白以外の各文字が鳴り終わる時刻（秒、先頭 0 基準）。符号表にない文字は除く */
+export function charEndTimes(text: string, timing: Timing): number[] {
+  return layout(text, timing).charEnds;
+}
+
+function layout(text: string, timing: Timing): { intervals: [number, number][]; charEnds: number[] } {
   const out: [number, number][] = [];
+  const charEnds: number[] = [];
   let t = 0;
   let pendingGap = 0;
   for (const ch of text.toUpperCase()) {
@@ -43,9 +55,10 @@ export function toIntervals(text: string, timing: Timing): [number, number][] {
       t += len;
       if (i < code.length - 1) t += timing.dot;
     }
+    charEnds.push(t);
     pendingGap = timing.charGap;
   }
-  return out;
+  return { intervals: out, charEnds };
 }
 
 export class MorsePlayer {
@@ -97,7 +110,7 @@ export class MorsePlayer {
       this.current = { osc, finish };
     });
 
-    return { endPerf: this.toPerf(ctx, end), done };
+    return { endPerf: this.toPerf(ctx, end), startPerf: this.toPerf(ctx, start), done };
   }
 
   stop(): void {

@@ -1,5 +1,6 @@
 import type { MorsePlayer } from "../audio/player";
-import { farnsworth } from "../audio/timing";
+import { MORSE } from "../audio/code";
+import { averageCodeUnits, charsPerMinute, farnsworth } from "../audio/timing";
 import type { Attempt } from "../storage/db";
 import type { Settings } from "../storage/settings";
 import { adaptEwpm, EWPM_WINDOW } from "./adaptive";
@@ -30,7 +31,8 @@ export interface GroupSummary {
 }
 
 export type GroupEvent =
-  | { type: "group"; index: number; total: number; ewpm: number; charGapSec: number }
+  /** cpm: この間隔で流したときの 1 分間あたりの字数 */
+  | { type: "group"; index: number; total: number; ewpm: number; charGapSec: number; cpm: number }
   | { type: "typed"; typed: string }
   | { type: "played" }
   | ({ type: "checked"; index: number; total: number } & GroupResult)
@@ -170,7 +172,15 @@ export class GroupDrill {
     this.playing = true;
 
     const timing = this.timing;
-    onEvent({ type: "group", index: this.index, total: settings.groups, ewpm: this.ewpm, charGapSec: timing.charGap });
+    const cpm = charsPerMinute(timing, averageCodeUnits(this.chars.map((c) => MORSE[c])));
+    onEvent({
+      type: "group",
+      index: this.index,
+      total: settings.groups,
+      ewpm: this.ewpm,
+      charGapSec: timing.charGap,
+      cpm,
+    });
     onEvent({ type: "typed", typed: "" });
 
     const pb = player.play(target, timing, this.tone);

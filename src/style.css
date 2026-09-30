@@ -419,3 +419,130 @@ button.choice:disabled {
 .detail.concealed {
   visibility: hidden;
 }
+
+.lag {
+  text-align: center;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.lag.over {
+  background: var(--ng);
+  border-color: var(--ng);
+  color: #fff;
+}
+
+.typed {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.4rem;
+  letter-spacing: 0.05em;
+  word-spacing: 0.4em;
+  min-height: 3.2em;
+  max-height: 6.5em;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.compare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.2rem;
+}
+
+.compare-typed {
+  color: var(--muted);
+}
+
+.compare .ok {
+  color: var(--ok);
+}
+
+.compare .wrong {
+  color: var(--ng);
+  font-weight: 700;
+}
+
+.compare .missing {
+  color: var(--muted);
+}
+
+.compare-target .missing {
+  text-decoration: underline;
+}
+
+.timer {
+  font-size: 3rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  margin-top: 24px;
+}
+
+.bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
+.answer-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.15rem;
+}
+
+.answer-line {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.line-no {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-width: 1.6em;
+  text-align: right;
+}
+
+input.count {
+  font: inherit;
+  width: 5em;
+  padding: 4px 8px;
+  text-align: right;
+}
+
+.score {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.score.pass,
+td.pass {
+  color: var(--ok);
+}
+
+.warning {
+  color: var(--ng);
+  font-size: 0.9rem;
+}
+
+.warning:empty {
+  display: none;
+}

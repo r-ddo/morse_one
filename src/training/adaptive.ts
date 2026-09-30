@@ -39,3 +39,17 @@ export function adaptEwpm(ewpm: number, accuracy: number, cwpm: number): number 
   if (next === ewpm && accuracy < SLOW_DOWN_ACC) next -= 0.5;
   return Math.min(cwpm, Math.max(MIN_EWPM, next));
 }
+
+export const MIN_CPM = 10;
+export const MAX_CPM = 150;
+
+/**
+ * 遅れ受信の速度（字/分）を 1 セッションごとに見直す。
+ * 正答率 90% 以上で、かつ許容した遅れを超えなかったら約 1.1 倍、80% 未満なら約 1/1.1 倍
+ */
+export function adaptCpm(cpm: number, accuracy: number, lagKept: boolean): number {
+  let next = cpm;
+  if (accuracy >= SPEED_UP_ACC && lagKept) next = Math.max(cpm + 1, Math.round(cpm * 1.1));
+  else if (accuracy < SLOW_DOWN_ACC) next = Math.min(cpm - 1, Math.round(cpm / 1.1));
+  return Math.min(MAX_CPM, Math.max(MIN_CPM, next));
+}

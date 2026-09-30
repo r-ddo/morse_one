@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adaptEwpm, adaptLimit, giveUpMs, MAX_LIMIT_MS, MIN_EWPM, MIN_LIMIT_MS } from "./adaptive";
+import { adaptCpm, adaptEwpm, adaptLimit, giveUpMs, MAX_CPM, MAX_LIMIT_MS, MIN_CPM, MIN_EWPM, MIN_LIMIT_MS } from "./adaptive";
 
 describe("adaptLimit", () => {
   it("tightens when almost all answers are within the limit", () => {
@@ -49,5 +49,22 @@ describe("adaptEwpm", () => {
   it("stays between the minimum and the character speed", () => {
     expect(adaptEwpm(MIN_EWPM, 0, 25)).toBe(MIN_EWPM);
     expect(adaptEwpm(24.5, 1, 25)).toBe(25);
+  });
+});
+
+describe("adaptCpm", () => {
+  it("speeds up only when accuracy is high and the lag was kept", () => {
+    expect(adaptCpm(30, 0.95, true)).toBe(33);
+    expect(adaptCpm(30, 0.95, false)).toBe(30);
+  });
+
+  it("slows down when accuracy is low", () => {
+    expect(adaptCpm(33, 0.5, true)).toBe(30);
+  });
+
+  it("moves by at least one and stays within bounds", () => {
+    expect(adaptCpm(MIN_CPM, 0, true)).toBe(MIN_CPM);
+    expect(adaptCpm(MAX_CPM, 1, true)).toBe(MAX_CPM);
+    expect(adaptCpm(10, 1, true)).toBe(11);
   });
 });
