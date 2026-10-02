@@ -16,6 +16,7 @@ import { createKeyboard } from "./keyboard";
 import { showMockMenu } from "./mockScreen";
 import { showStats } from "./statsScreen";
 import { showStreamMenu } from "./streamScreen";
+import { showBanner } from "./updateBanner";
 
 export class App {
   private readonly player = new MorsePlayer();
@@ -53,6 +54,29 @@ export class App {
       }
       if (this.active.key(e)) e.preventDefault();
     });
+
+    // iOS ではアプリを離れると音が止められ、戻っても鳴らないことがある。
+    // 練習は中断し、音は次に練習を始めるときに作り直す
+    let interruptedWhileHidden = false;
+    const interrupt = () => {
+      const wasActive = this.active !== null;
+      if (wasActive) this.stopDrill();
+      this.player.release();
+      return wasActive;
+    };
+    const notice = "音が止められたため、練習を中断しました";
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        if (interrupt()) interruptedWhileHidden = true;
+      } else if (interruptedWhileHidden) {
+        interruptedWhileHidden = false;
+        showBanner(notice);
+      }
+    });
+    this.player.onInterrupted = () => {
+      if (document.visibilityState === "hidden") return;
+      if (interrupt()) showBanner(notice);
+    };
   }
 
   showHome(): void {

@@ -61,19 +61,54 @@ function layout(text: string, timing: Timing): { intervals: [number, number][]; 
   return { intervals: out, charEnds };
 }
 
+/** resume() がこの時間内に終わらなければ AudioContext を作り直す（ミリ秒） */
+const RESUME_TIMEOUT_MS = 300;
+
 export class MorsePlayer {
   private ctx: AudioContext | null = null;
   private current: { osc: OscillatorNode; finish: () => void } | null = null;
 
-  /** ユーザー操作のハンドラ内で呼ぶこと（iOS の自動再生制限のため） */
+  /** 再生中に別のアプリへの切り替えや着信などで音が止められたときに呼ばれる */
+  onInterrupted: (() => void) | null = null;
+
+  /**
+   * ユーザー操作のハンドラ内で呼ぶこと（iOS の自動再生制限のため）。
+   * iOS ではアプリを切り替えた後、resume() が終わらない・状態は running でも無音、
+   * ということがあるので、再開できなければ AudioContext を作り直す
+   */
   async unlock(): Promise<void> {
-    if (!this.ctx) {
-      // iOS のマナーモードでも鳴らす（Safari 16.4 以降）
-      const session = (navigator as AudioSessionNavigator).audioSession;
-      if (session) session.type = "playback";
-      this.ctx = new AudioContext();
+    if (this.ctx && this.ctx.state !== "running") {
+      const resumed = await Promise.race([
+        this.ctx.resume().then(() => true, () => false),
+        new Promise<boolean>((r) => setTimeout(() => r(false), RESUME_TIMEOUT_MS)),
+      ]);
+      if (!resumed || (this.ctx.state as string) !== "running") this.release();
     }
+    if (!this.ctx) this.ctx = this.createContext();
     if (this.ctx.state !== "running") await this.ctx.resume();
+  }
+
+  /** 再生を止めて AudioContext を閉じる。次の unlock() で作り直す */
+  release(): void {
+    this.stop();
+    const ctx = this.ctx;
+    this.ctx = null;
+    if (ctx) {
+      ctx.onstatechange = null;
+      void ctx.close().catch(() => {});
+    }
+  }
+
+  private createContext(): AudioContext {
+    // iOS のマナーモードでも鳴らす（Safari 16.4 以降）
+    const session = (navigator as AudioSessionNavigator).audioSession;
+    if (session) session.type = "playback";
+    const ctx = new AudioContext();
+    ctx.onstatechange = () => {
+      // iOS では "interrupted" になることがある
+      if (this.ctx === ctx && ctx.state !== "running" && this.current) this.onInterrupted?.();
+    };
+    return ctx;
   }
 
   play(text: string, timing: Timing, tone: ToneOptions): Playback {
