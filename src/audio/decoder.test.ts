@@ -126,16 +126,74 @@ describe("MorseDecoder", () => {
       ...decoder.keyUp(5 * dot),
       ...decoder.tick(8 * dot),
       ...decoder.keyDown(8 * dot),
+      ...decoder.keyUp(9 * dot),
     ];
-    expect(events.map((e) => e.type)).toEqual(["mark", "gap", "mark", "char", "gap"]);
+    expect(events.map((e) => e.type)).toEqual(["mark", "gap", "mark", "char", "gap", "mark"]);
     expect(events[3]).toMatchObject({ char: "A", code: ".-" });
     expect(events[4]).toMatchObject({ kind: "char" });
+  });
+});
+
+/** 区間のとおりにキーを上げ下げして復号した文字列 */
+function decodeKeying(intervals: [number, number][], initialWpm = 20): { text: string; decoder: MorseDecoder } {
+  const decoder = new MorseDecoder(initialWpm);
+  let text = "";
+  const apply = (events: DecodeEvent[]) => {
+    for (const e of events) {
+      if (e.type === "char") text += e.char ?? "*";
+      else if (e.type === "word") text += " ";
+    }
+  };
+  for (const [on, off] of intervals) {
+    apply(decoder.keyDown(on));
+    apply(decoder.keyUp(off));
+  }
+  apply(decoder.tick((intervals.at(-1)?.[1] ?? 0) + 5));
+  return { text: text.trim(), decoder };
+}
+
+describe("MorseDecoder with spurious detections", () => {
+  const TEXT = "VVV AOQXC MOPUB TZBSL KYKYZ RKMHL";
+  const dot = 1.2 / 20;
+
+  it("ignores very short marks and keeps the speed estimate", () => {
+    // 文字間の中ほどに短点の 1/4 の誤検出を 3 文字おきに入れる（以前は速度を約 2 倍に見積もった）
+    const clean = toIntervals(TEXT, farnsworth(20, 20));
+    const noisy: [number, number][] = [];
+    clean.forEach((x, i) => {
+      noisy.push(x);
+      const next = clean[i + 1];
+      if (next && next[0] - x[1] > 2.5 * dot && i % 3 === 0) {
+        const mid = (x[1] + next[0]) / 2;
+        noisy.push([mid - dot / 8, mid + dot / 8]);
+      }
+    });
+    const { text, decoder } = decodeKeying(noisy);
+    expect(text).toBe(TEXT);
+    expect(Math.abs(decoder.wpm - 20)).toBeLessThan(1);
+  });
+
+  it("bridges very short dropouts inside a mark", () => {
+    // 長点の途中でトーンが短点の 1/5 だけ途切れる
+    const broken = toIntervals(TEXT, farnsworth(20, 20)).flatMap(([on, off]): [number, number][] => {
+      if (off - on < 2 * dot) return [[on, off]];
+      const mid = (on + off) / 2;
+      return [[on, mid - dot / 10], [mid + dot / 10, off]];
+    });
+    const { text, decoder } = decodeKeying(broken);
+    expect(text).toBe(TEXT);
+    expect(Math.abs(decoder.wpm - 20)).toBeLessThan(1);
   });
 });
 
 describe("estimateDot", () => {
   it("averages dots and thirds of dashes", () => {
     expect(estimateDot([0.05, 0.15, 0.05, 0.15], 0.1)).toBeCloseTo(0.05);
+  });
+
+  it("is not pulled by a few outliers", () => {
+    const marks = [0.06, 0.18, 0.06, 0.06, 0.18, 0.18, 0.06, 0.18, 0.015, 0.018, 0.06, 0.18];
+    expect(estimateDot(marks, 0.06)).toBeCloseTo(0.06, 2);
   });
 
   it("picks the interpretation closest to the previous estimate for one cluster", () => {

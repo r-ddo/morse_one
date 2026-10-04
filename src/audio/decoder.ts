@@ -33,6 +33,13 @@ export interface CharTiming {
 const RECENT = 20;
 /** 短点と長点の 2 群に分かれているとみなす長さの比 */
 const SPLIT_RATIO = 1.8;
+/**
+ * 推定短点長に対してこれより短い符号は雑音として捨て、これより短い途切れは同じ符号の続きとみなす。
+ * 実際の短点は整形のぶん短めに測れても 0.8 倍程度より短くはならない
+ */
+const MIN_PART = 0.4;
+/** 短い符号を捨てるのは、速度の推定に使う符号がこれだけたまってから */
+const MIN_PART_AFTER = 4;
 
 /**
  * キーの上げ下げの時刻からモールス符号を復元する。
@@ -49,8 +56,11 @@ export class MorseDecoder {
   private readonly elementGaps: number[] = [];
   /** 直近の、符号内より長い間（文字間・語間）の長さ */
   private readonly longGaps: number[] = [];
-  /** 確定していない符号の鳴り始めと鳴り終わりの時刻 */
-  private pending: { start: number; end: number }[] = [];
+  /**
+   * 確定していない符号の鳴り始めと鳴り終わりの時刻。
+   * prevUp はその前にキーを上げた時刻、gaps はその前の間を記録した一覧（途切れをつなぐときに戻すため）
+   */
+  private pending: { start: number; end: number; prevUp: number | null; gaps: number[] | null }[] = [];
   private downAt: number | null = null;
   private upAt: number | null = null;
   private wordPending = false;
@@ -87,14 +97,15 @@ export class MorseDecoder {
   keyDown(t: number): DecodeEvent[] {
     if (this.downAt !== null) return [];
     const out = this.tick(t);
-    if (this.upAt !== null) {
-      const duration = t - this.upAt;
-      const units = duration / this.dot;
-      const kind = units < 2 ? "element" : duration < this.wordThreshold ? "char" : "word";
-      out.push({ type: "gap", kind, duration, units });
-      const list = kind === "element" ? this.elementGaps : this.longGaps;
-      list.push(duration);
-      if (list.length > RECENT) list.shift();
+    const last = this.pending.at(-1);
+    if (last && last.end === this.upAt && t - last.end < MIN_PART * this.dot) {
+      // ごく短い途切れ。直前の符号の続きとして、その符号をやり直す
+      this.pending.pop();
+      this.recent.pop();
+      last.gaps?.pop();
+      this.downAt = last.start;
+      this.upAt = last.prevUp;
+      return out;
     }
     this.downAt = t;
     return out;
@@ -102,15 +113,32 @@ export class MorseDecoder {
 
   keyUp(t: number): DecodeEvent[] {
     if (this.downAt === null) return [];
-    const duration = t - this.downAt;
+    const start = this.downAt;
+    const duration = t - start;
     this.downAt = null;
+    if (duration < MIN_PART * this.dot && this.recent.length >= MIN_PART_AFTER) {
+      // ごく短い符号は雑音として捨てる（キーを上げたままだったことにする）
+      return [];
+    }
+    const out: DecodeEvent[] = [];
+    let gaps: number[] | null = null;
+    if (this.upAt !== null) {
+      const gap = start - this.upAt;
+      const units = gap / this.dot;
+      const kind = units < 2 ? "element" : gap < this.wordThreshold ? "char" : "word";
+      out.push({ type: "gap", kind, duration: gap, units });
+      gaps = kind === "element" ? this.elementGaps : this.longGaps;
+      gaps.push(gap);
+      if (gaps.length > RECENT) gaps.shift();
+    }
+    this.pending.push({ start, end: t, prevUp: this.upAt, gaps });
     this.upAt = t;
     this.recent.push(duration);
     if (this.recent.length > RECENT) this.recent.shift();
     this.dot = this.estimate();
-    this.pending.push({ start: t - duration, end: t });
     this.wordPending = true;
-    return [{ type: "mark", kind: this.classify(duration), duration, units: duration / this.dot }];
+    out.push({ type: "mark", kind: this.classify(duration), duration, units: duration / this.dot });
+    return out;
   }
 
   /**
@@ -167,14 +195,20 @@ export class MorseDecoder {
 /**
  * 符号の長さの一覧から短点長を推定する。
  * 長さの比が大きく開くところで短点と長点の 2 群に分け、長点は 1/3 にして平均する。
+ * 雑音による極端に短い符号や、少数の外れ値だけの群には引っ張られないようにする。
  * 1 群しかない（E や T ばかり）ときは、前回の推定に近い解釈を選ぶ
  */
 export function estimateDot(marks: readonly number[], prev: number): number {
   if (marks.length === 0) return prev;
-  const sorted = [...marks].sort((a, b) => a - b);
+  const all = [...marks].sort((a, b) => a - b);
+  // 下位 1/4 の長さ（ふつうは短点）に比べて極端に短いものは雑音として除く
+  const q1 = all[Math.floor(all.length / 4)];
+  const sorted = all.filter((d) => d >= MIN_PART * q1);
+  // 少数の外れ値だけで 1 群を作る分け方は選ばない
+  const minCluster = sorted.length >= 5 ? Math.ceil(sorted.length * 0.15) : 1;
   let split = -1;
   let bestRatio = SPLIT_RATIO;
-  for (let i = 0; i < sorted.length - 1; i++) {
+  for (let i = minCluster - 1; i < sorted.length - minCluster; i++) {
     const ratio = sorted[i + 1] / sorted[i];
     if (ratio >= bestRatio) {
       bestRatio = ratio;

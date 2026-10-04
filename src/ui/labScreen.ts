@@ -31,6 +31,7 @@ interface LabView {
   wpm: HTMLElement;
   freq: HTMLElement;
   level: HTMLElement;
+  rate: HTMLElement;
   envelope: HTMLCanvasElement;
   spectrum: HTMLCanvasElement;
   text: HTMLElement;
@@ -76,6 +77,7 @@ export function showLab(ctx: ScreenContext): void {
     wpm: h("div", { class: "tile-value" }, "―"),
     freq: h("div", { class: "tile-value" }, "―"),
     level: h("div", { class: "tile-value" }, "―"),
+    rate: h("p", { class: "note" }),
     envelope: h("canvas", { class: "lab-canvas" }),
     spectrum: h("canvas", { class: "lab-canvas spectrum" }),
     text: h("span", {}),
@@ -101,6 +103,7 @@ export function showLab(ctx: ScreenContext): void {
       h("div", { class: "lab-tiles" }, view.lamp, tile("推定速度", view.wpm), tile("周波数", view.freq), tile("入力レベル", view.level)),
       view.envelope,
       h("p", { class: "note" }, `目的の周波数の強さ（直近 ${HISTORY_SEC} 秒）。塗りがキーを下げていると判定した区間、点線が閾値`),
+      view.rate,
       view.spectrum,
       h("p", { class: "note" }, "スペクトル（0〜2000 Hz）。縦線が検出に使っている周波数"),
       h("div", { class: "field" },
@@ -268,6 +271,9 @@ class LabSession {
     setText(view.wpm, this.marks.length > 0 ? `${listener.decoder.wpm.toFixed(1)} WPM` : "―");
     setText(view.freq, `${Math.round(detector.freq)} Hz`);
     setText(view.level, Number.isFinite(listener.rmsDb) ? `${Math.round(listener.rmsDb)} dBFS` : "―");
+    const rate = listener.measuredRate;
+    setText(view.rate, rate === null ? "" :
+      `実際に届いた入力 ${Math.round(rate)} サンプル/秒（想定 ${listener.mic.ctx.sampleRate}）`);
     if (document.activeElement !== view.freqInput) {
       view.freqInput.value = String(Math.round(detector.freq));
       setText(view.freqValue, `${Math.round(detector.freq)} Hz`);

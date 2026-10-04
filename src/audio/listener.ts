@@ -35,6 +35,9 @@ export class KeyListener {
   rmsDb = -Infinity;
   private readonly spectrum: Float32Array<ArrayBuffer>;
   private freqCandidates: number[] = [];
+  /** 最初のチャンクを受け取った時刻（performance.now()）と、それ以降に受け取ったサンプル数 */
+  private firstChunkAt: number | null = null;
+  private received = 0;
 
   private constructor(
     readonly mic: MicCapture,
@@ -70,6 +73,16 @@ export class KeyListener {
     return this.spectrum;
   }
 
+  /**
+   * 1 秒あたりに実際に届いたサンプル数。AudioContext のサンプリング周波数と大きく違えば、
+   * 時間を測り違えている（速度や周波数を誤って見積もる）。測り始めて 2 秒たつまでは null
+   */
+  get measuredRate(): number | null {
+    if (this.firstChunkAt === null) return null;
+    const sec = (performance.now() - this.firstChunkAt) / 1000;
+    return sec >= 2 ? this.received / sec : null;
+  }
+
   setFreq(freq: number): void {
     this.detector.setFreq(freq);
     this.freqCandidates = [];
@@ -85,6 +98,9 @@ export class KeyListener {
   }
 
   private onSamples(samples: Float32Array): void {
+    // 最初のチャンクまでに溜まっていた分は数えない
+    if (this.firstChunkAt === null) this.firstChunkAt = performance.now();
+    else this.received += samples.length;
     let sum = 0;
     for (const x of samples) sum += x * x;
     this.rmsDb = 10 * Math.log10(sum / samples.length + 1e-12);
