@@ -38,6 +38,8 @@ export interface Settings {
   sendMockCpm: number;
   /** 送信の模擬試験の長さ（分） */
   sendMockMinutes: number;
+  /** グループ送信で、送信の苦手な文字を多めに出すか */
+  sendFocusWeak: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -61,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sendChars: 80,
   sendMockCpm: 80,
   sendMockMinutes: 5,
+  sendFocusWeak: true,
 };
 
 const KEY = "morse_one.settings";

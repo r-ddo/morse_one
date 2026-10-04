@@ -1,8 +1,10 @@
 import { KeyListener } from "../audio/listener";
 import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
+import { farnsworth } from "../audio/timing";
 import { SendSession, sendGroups, type SendPhase } from "../training/sendDrill";
-import type { SendResult, Spread } from "../training/sendScoring";
+import { replayIntervals, type SendResult, type SentChar, type Spread } from "../training/sendScoring";
+import { sendCharStats, sendConfusions, sendErrorRate, sendWeights, weakSendChars } from "../training/sendWeak";
 import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
@@ -14,6 +16,15 @@ import { keepScreenOn } from "./wakeLock";
 const EXAM_CPM = 80;
 const EXAM_MINUTES = 5;
 const EXAM_CHARS = 400;
+
+/** 苦手な文字の集計に使う期間（ミリ秒） */
+const WEAK_WINDOW_MS = 60 * 86_400_000;
+
+/**
+ * 送信の記録（新しい順）。メニューを開いたときに読み込み、練習を終えるたびに足す。
+ * 出題に使うが、マイクを開く前にデータベースを待つと iOS でタップの中とみなされなくなるので、先に読んでおく
+ */
+let records: SendRecord[] = [];
 
 /** グループ送信か、時間を区切った模擬試験か */
 type SendMode = { kind: "group" } | { kind: "mock"; cpm: number; minutes: number };
@@ -34,7 +45,13 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     console.error("failed to load sends", e);
     return [];
   });
+  records = sends;
+  const stats = sendCharStats(sends, Date.now() - WEAK_WINDOW_MS);
+  const weak = weakSendChars(stats, 8);
+  const confusions = sendConfusions(stats, 6);
   const s = ctx.settings;
+  const focus = h("input", { type: "checkbox", checked: s.sendFocusWeak });
+  focus.addEventListener("change", () => ctx.updateSettings({ sendFocusWeak: focus.checked }));
   const mockText = () => `お題 ${ctx.settings.sendMockCpm * ctx.settings.sendMockMinutes} 字`;
   const mockLength = h("div", { class: "note" }, mockText());
   ctx.render(
@@ -53,6 +70,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
         String(s.sendChars),
         (v) => ctx.updateSettings({ sendChars: Number(v) }),
       )),
+      h("label", { class: "check" }, focus, h("span", {}, "送信の苦手な文字を多めに出す")),
     ),
     h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, "マイクを開始"),
     h("h2", {}, "模擬試験"),
@@ -83,6 +101,14 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
       type: "button",
       onclick: () => void startSend(ctx, { kind: "mock", cpm: ctx.settings.sendMockCpm, minutes: ctx.settings.sendMockMinutes }),
     }, "模擬試験をはじめる"),
+    (weak.length > 0 || confusions.length > 0) &&
+      h("div", { class: "misses" },
+        h("h2", {}, "送信の苦手な文字（直近 60 日）"),
+        ...weak.map((w) => h("span", { class: "chip" }, `${w.char} ${Math.round(sendErrorRate(w) * 100)}%`)),
+        confusions.length > 0 && h("p", { class: "note" }, "取り違え（お題 → 送った符号）"),
+        ...confusions.map(([t, sent, n]) =>
+          h("span", { class: "chip" }, `${t} → ${sent.length > 1 ? prettyCode(sent) : sent} ×${n}`)),
+      ),
     sends.length > 0 &&
       h("div", { class: "misses" },
         h("h2", {}, "最近の結果"),
@@ -106,8 +132,13 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   ctx.player.release();
   const { charset, sendChars } = ctx.settings;
   const chars = mode.kind === "mock" ? mode.cpm * mode.minutes : sendChars;
+  const charList = charsetChars(charset);
+  // 模擬試験は試験と同じく一様に出す
+  const weights = mode.kind === "group" && ctx.settings.sendFocusWeak
+    ? sendWeights(sendCharStats(records, Date.now() - WEAK_WINDOW_MS), charList)
+    : undefined;
   const session = new SendSession(
-    sendGroups(Math.ceil(chars / 5), charsetChars(charset)),
+    sendGroups(Math.ceil(chars / 5), charList, Math.random, 5, weights),
     mode.kind === "mock" ? { limitSec: mode.minutes * 60 } : {},
   );
 
@@ -235,6 +266,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
         ? { mode: "mock", charset, wpm, minutes: mode.minutes, targetCpm: mode.cpm }
         : { mode: "group", charset, wpm },
     );
+    records = [record, ...records];
     void saveSend(record).catch((e) => console.error("failed to save send", e));
     showSendResult(ctx, session, record, mode);
   }
@@ -297,6 +329,8 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
     ["語間", quality.wordGap, "7"],
   ];
 
+  const replay = replayControls(ctx, session, record);
+
   ctx.render(
     h("h1", {}, mode.kind === "mock" ? `模擬試験の結果（${mode.minutes} 分・目標 ${mode.cpm} 字/分）` : "結果"),
     h("div", { class: "summary" },
@@ -310,9 +344,11 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
       ...breakdown.filter(([, n]) => n > 0).map(([label, n, rule]) =>
         h("tr", {}, h("th", {}, label), h("td", {}, `${n}`), h("td", {}, rule))),
     ),
-    h("div", { class: "send-groups" }, ...groupBlocks(session.groups, session.result, session.target.length)),
+    replay.buttons,
+    replay.grid,
     h("p", { class: "note" },
-      "下段が復号した文字。赤は誤り、黄は符号不明りょう、－は脱字" + (score.unsent > 0 ? "、空欄は未送信" : "")),
+      "下段が復号した文字。赤は誤り、黄は符号不明りょう、－は脱字" + (score.unsent > 0 ? "、空欄は未送信" : "") +
+      "。組をタップすると、その組の自分の送信と正しい符号を続けて鳴らします"),
     h("div", { class: "chart-card" },
       h("h2", {}, "符号の質"),
       h("table", { class: "lab-table" },
@@ -326,9 +362,71 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
         : h("p", {}, "目立った癖はありません"),
     ),
     h("div", { class: "row" },
-      h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, mode) }, "もう一度"),
-      h("button", { type: "button", onclick: () => void showSendMenu(ctx) }, "送信練習メニュー"),
+      h("button", { class: "primary", type: "button", onclick: () => (replay.stop(), void startSend(ctx, mode)) }, "もう一度"),
+      h("button", { type: "button", onclick: () => (replay.stop(), void showSendMenu(ctx)) }, "送信練習メニュー"),
     ),
-    h("button", { type: "button", onclick: () => ctx.showHome() }, "ホーム"),
+    h("button", { type: "button", onclick: () => (replay.stop(), ctx.showHome()) }, "ホーム"),
   );
+}
+
+/**
+ * 結果画面の再生。記録した符号の長さのとおりに自分の送信を鳴らし、同じ速度の正しい符号と聞き比べる。
+ * マイクは閉じてから鳴らす（送信中はアプリから音を出さない）
+ */
+function replayControls(ctx: ScreenContext, session: SendSession, record: SendRecord) {
+  const result = session.result;
+  const tone = () => ({ freq: ctx.settings.freq, volume: ctx.settings.volume });
+  const timing = farnsworth(Math.max(5, record.wpm), Math.max(5, record.wpm));
+  /** 送った組の数（未送信の組は鳴らさない） */
+  const sentGroups = Math.ceil(session.position / 5);
+  let seq = 0;
+
+  const blocks = groupBlocks(session.groups, result, session.target.length);
+  const highlight = (gi: number | null) => blocks.forEach((b, i) => b.classList.toggle("playing", i === gi));
+
+  const playOwn = async (chars: SentChar[], my: number) => {
+    if (chars.length === 0 || my !== seq) return;
+    await ctx.player.playIntervals(replayIntervals(chars), tone()).done;
+  };
+  const playModel = async (text: string, my: number) => {
+    if (my !== seq) return;
+    await ctx.player.play(text, timing, tone()).done;
+  };
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function run(task: (my: number) => Promise<void>, gi: number | null): Promise<void> {
+    const my = ++seq;
+    await ctx.player.unlock();
+    highlight(gi);
+    await task(my);
+    if (my === seq) highlight(null);
+  }
+
+  blocks.forEach((b, gi) => {
+    if (gi >= sentGroups) return;
+    b.classList.add("tappable");
+    b.addEventListener("click", () => void run(async (my) => {
+      const kept = [...new Set(result.keptAt.slice(gi * 5, gi * 5 + 5).filter((i): i is number => i !== null))]
+        .sort((a, b) => a - b)
+        .map((i) => result.kept[i]);
+      await playOwn(kept, my);
+      if (kept.length > 0 && my === seq) await pause(600);
+      await playModel(session.groups[gi], my);
+    }, gi));
+  });
+
+  const stop = () => {
+    seq++;
+    ctx.player.stop();
+    highlight(null);
+  };
+  const buttons = h("div", { class: "row" },
+    h("button", { type: "button", onclick: () => void run((my) => playOwn(result.kept, my), null) }, "自分の送信を聞く"),
+    h("button", {
+      type: "button",
+      onclick: () => void run((my) => playModel(session.groups.slice(0, sentGroups).join(" "), my), null),
+    }, "正しい符号で聞く"),
+    h("button", { type: "button", class: "small", onclick: stop }, "止める"),
+  );
+  return { buttons, grid: h("div", { class: "send-groups" }, ...blocks), stop };
 }

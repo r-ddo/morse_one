@@ -68,6 +68,17 @@ export interface SendQuality {
 export interface SendResult {
   score: SendScore;
   quality: SendQuality;
+  /** 訂正符号と取り消した文字を除いた、採点に使った送信 */
+  kept: SentChar[];
+  /** お題の各文字に対応した kept の位置（対応がなければ null） */
+  keptAt: (number | null)[];
+}
+
+/** 採点の結果をお題の 1 文字ごとに 1 字で表す（記録用）。o 正しい、u 符号不明りょう、w 誤字、m 脱字、- 未送信 */
+export function markString(score: SendScore): string {
+  return score.marks
+    .map((m, i) => (m === "ok" ? (score.unclearAt[i] ? "u" : "o") : m === "wrong" ? "w" : m === "missing" ? "m" : "-"))
+    .join("");
 }
 
 export interface SendOptions {
@@ -113,6 +124,7 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
   const marks: SendMark[] = new Array(n);
   const sentAt: (string | null)[] = new Array(n).fill(null);
   const unclearAt: boolean[] = new Array(n).fill(false);
+  const keptAt: (number | null)[] = new Array(n).fill(null);
   /** 送信の各文字が対応したお題の位置 */
   const targetOf: (number | null)[] = new Array(kept.length).fill(null);
   let wrong = 0;
@@ -131,6 +143,7 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
     }
     const c = kept[s].c;
     targetOf[s] = t;
+    keptAt[t] = s;
     sentAt[t] = c.char ?? c.code;
     if (c.char === target[t]) {
       marks[t] = "ok";
@@ -193,7 +206,30 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
       points: Math.max(0, 100 - deduction),
     },
     quality: analyze(kept.map((k) => k.c), charGaps, wordGaps),
+    kept: kept.map((k) => k.c),
+    keptAt,
   };
+}
+
+/**
+ * 送信を音で鳴らし直すための発音区間（秒、最初の符号の鳴り始めを 0 とする）。
+ * 測った長さから伸び（残響など）を差し引き、送ったとおりの長さに戻す。
+ * 長い休み（maxGap 秒より長い間）は maxGap に縮める
+ */
+export function replayIntervals(chars: readonly SentChar[], maxGap = 1): [number, number][] {
+  const out: [number, number][] = [];
+  let t = 0;
+  let prevEnd: number | null = null;
+  for (const c of chars) {
+    if (prevEnd !== null) t += Math.min(maxGap, c.start - prevEnd + c.bias);
+    c.marks.forEach((d, i) => {
+      const len = Math.max(0.005, d - c.bias);
+      out.push([t, t + len]);
+      t += len + (i < c.gaps.length ? c.gaps[i] + c.bias : 0);
+    });
+    prevEnd = c.end;
+  }
+  return out;
 }
 
 type TailCost = ((count: number) => number) | undefined;

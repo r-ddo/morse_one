@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MORSE } from "../audio/code";
-import { evaluateSend, isCorrection, isUnclear, type SentChar } from "./sendScoring";
+import { evaluateSend, isCorrection, isUnclear, markString, replayIntervals, type SentChar } from "./sendScoring";
 
 const DOT = 0.06;
 const HH = "........";
@@ -103,6 +103,27 @@ describe("evaluateSend", () => {
     const words = sendText("ABCDE FGHIJ", { wordGap: 15 });
     expect(evaluateSend("ABCDE", sent).score).toMatchObject({ longCharGaps: 1, deduction: 1 });
     expect(evaluateSend("ABCDEFGHIJ", words).score).toMatchObject({ longWordGaps: 1, deduction: 1 });
+  });
+});
+
+describe("records and replay", () => {
+  it("summarises marks per prompt character and maps them to kept characters", () => {
+    const result = evaluateSend("ABCDEFGHIJ", sendText("ABX#BCDX FG"), { timed: true });
+    expect(markString(result.score)).toBe("oooowoo---");
+    expect(result.kept.map((c) => c.char).join("")).toBe("ABCDXFG");
+    expect(result.keptAt.slice(0, 7)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it("rebuilds the sent timing, removing the stretch and shortening long pauses", () => {
+    const sent = sendText("ET", {}, 5).map((c) => ({ ...c, bias: 0.01, marks: c.marks.map((d) => d + 0.01) }));
+    sent[1] = { ...sent[1], start: sent[1].start - 0.01 };
+    const iv = replayIntervals(sent);
+    expect(iv[0][0]).toBe(0);
+    expect(iv[0][1]).toBeCloseTo(DOT);
+    expect(iv[1][0]).toBeCloseTo(4 * DOT);
+    expect(iv[1][1]).toBeCloseTo(7 * DOT);
+    const paused = sendText("E", {}, 0).concat(sendText("T", {}, 10));
+    expect(replayIntervals(paused, 1)[1][0]).toBeCloseTo(DOT + 1);
   });
 });
 

@@ -871,3 +871,13 @@ svg.chart {
 .send-clock.behind {
   color: var(--ng);
 }
+
+.send-group.tappable {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.send-group.playing {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

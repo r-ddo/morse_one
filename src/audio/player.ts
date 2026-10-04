@@ -112,11 +112,15 @@ export class MorsePlayer {
   }
 
   play(text: string, timing: Timing, tone: ToneOptions): Playback {
+    return this.playIntervals(toIntervals(text, timing), tone);
+  }
+
+  /** 発音区間（秒、先頭 0 基準）のとおりに鳴らす */
+  playIntervals(intervals: readonly [number, number][], tone: ToneOptions): Playback {
     const ctx = this.ctx;
     if (!ctx) throw new Error("MorsePlayer.unlock() has not been called");
     this.stop();
 
-    const intervals = toIntervals(text, timing);
     const start = ctx.currentTime + LEAD;
     const end = start + (intervals.at(-1)?.[1] ?? 0);
 

@@ -84,11 +84,24 @@ describe("SendSession", () => {
     session.skipWarmup();
     play(session, new MorseDecoder(), at("ABXDE", 0.2), 10);
     const r = session.toRecord({ mode: "group", charset: "alnum", wpm: 20, ts: 1 });
-    expect(r).toMatchObject({ ts: 1, target: "ABCDE", sent: ["A", "B", "X", "D", "E"], wrong: 1, points: 97 });
+    expect(r).toMatchObject({
+      ts: 1, target: "ABCDE", sent: ["A", "B", "X", "D", "E"], wrong: 1, points: 97,
+      marks: "oowoo", sentAt: ["A", "B", "X", "D", "E"],
+    });
   });
 });
 
 describe("sendGroups", () => {
+  it("draws characters in proportion to the weights", () => {
+    let seed = 3;
+    const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    const all = sendGroups(200, ["A", "B", "C"], random, 5, [1, 1, 6]).join("");
+    const share = (c: string) => [...all].filter((x) => x === c).length / all.length;
+    // 同じ文字を続けないので C は 6/8 には届かないが、ほかより多く出る
+    expect(share("C")).toBeGreaterThan(0.45);
+    expect(share("A")).toBeGreaterThan(0.15);
+  });
+
   it("makes groups without immediate repeats", () => {
     const groups = sendGroups(20, ["A", "B", "C"]);
     expect(groups).toHaveLength(20);

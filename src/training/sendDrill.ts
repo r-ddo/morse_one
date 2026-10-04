@@ -1,6 +1,6 @@
 import type { DecodeEvent } from "../audio/decoder";
 import type { SendRecord } from "../storage/db";
-import { evaluateSend, isCorrection, type SendResult, type SentChar } from "./sendScoring";
+import { evaluateSend, isCorrection, markString, type SendResult, type SentChar } from "./sendScoring";
 
 /**
  * warmup: VVV を送って周波数と速度の推定を合わせている。V を正しく復号できたら、その周波数と速度で固定してよい
@@ -156,6 +156,8 @@ export class SendSession {
       wordGapCv: quality.wordGap?.cv ?? null,
       ...(fields.minutes !== undefined ? { minutes: fields.minutes } : {}),
       ...(fields.targetCpm !== undefined ? { targetCpm: fields.targetCpm } : {}),
+      marks: markString(score),
+      sentAt: score.sentAt,
     };
   }
 
@@ -166,15 +168,30 @@ export class SendSession {
   }
 }
 
-/** 送信のお題。文字セットから一様に選び、同じ文字は続けない */
-export function sendGroups(count: number, chars: readonly string[], random = Math.random, groupLen = 5): string[] {
+/**
+ * 送信のお題。文字セットから選び（weights を渡せばその重みで、なければ一様に）、同じ文字は続けない
+ */
+export function sendGroups(
+  count: number,
+  chars: readonly string[],
+  random = Math.random,
+  groupLen = 5,
+  weights?: readonly number[],
+): string[] {
+  const total = weights?.reduce((a, b) => a + b, 0) ?? chars.length;
+  const pick = (): string => {
+    if (!weights) return chars[Math.floor(random() * chars.length)];
+    let r = random() * total;
+    for (let i = 0; i < chars.length; i++) if ((r -= weights[i]) < 0) return chars[i];
+    return chars[chars.length - 1];
+  };
   const groups: string[] = [];
   let prev = "";
   for (let g = 0; g < count; g++) {
     let group = "";
     for (let i = 0; i < groupLen; i++) {
       let c: string;
-      do c = chars[Math.floor(random() * chars.length)];
+      do c = pick();
       while (c === prev && chars.length > 1);
       group += c;
       prev = c;

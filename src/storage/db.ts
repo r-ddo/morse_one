@@ -169,6 +169,10 @@ export interface SendRecord {
   minutes?: number;
   /** 模擬試験の目標速度（字/分） */
   targetCpm?: number;
+  /** お題の各文字の判定（o 正しい、u 符号不明りょう、w 誤字、m 脱字、- 未送信）。古い記録にはない */
+  marks?: string;
+  /** お題の各文字に対応した送信（対応がなければ null）。古い記録にはない */
+  sentAt?: (string | null)[];
 }
 
 export async function saveSend(record: SendRecord): Promise<void> {
