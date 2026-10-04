@@ -12,11 +12,12 @@ import { keepScreenOn } from "./wakeLock";
 /** 1 総通の欧文暗語は送受信とも 1 分間 80 字 */
 const EXAM_CPM = 80;
 
-/** 画面を開き直しても、検出に使った周波数は引き継ぐ */
+/** 前回固定した周波数（Hz）と速度（WPM）。次の練習の初期値にする */
 let lastFreq = 700;
+let lastWpm = 20;
 
 const STATUS: Record<SendPhase, string> = {
-  warmup: "まず VVV を送ってください（周波数と速度を合わせます）",
+  warmup: "まず VVV を送ってください（周波数と速度を合わせて固定します）",
   ready: "準備できました。お題を送ってください",
   sending: "送信中… 送り終えて 3 秒たつと終了します",
   finished: "",
@@ -108,7 +109,7 @@ async function startSend(ctx: ScreenContext): Promise<void> {
 
   try {
     listener = await KeyListener.open(
-      { freq: lastFreq },
+      { freq: lastFreq, wpm: lastWpm },
       {
         onEvents: (events, now) => {
           if (session.handle(events, now)) dirty = true;
@@ -137,8 +138,15 @@ async function startSend(ctx: ScreenContext): Promise<void> {
     if (session.phase === "finished") return finish();
 
     lamp.classList.toggle("on", l.detector.keyDown);
-    const wpm = l.decoder.wpm;
-    speed.textContent = `${Math.round(l.detector.freq)} Hz・${wpm.toFixed(1)} WPM`;
+    if (lastPhase === "warmup" && session.phase !== "warmup") {
+      // VVV で確認できた周波数と速度で固定する。練習機の速度と音は練習の途中で変えないので、
+      // 外の音に周波数を持っていかれたり、送り方で速度の推定がぶれたりしないようにする
+      l.lock();
+      lastFreq = Math.round(l.detector.freq);
+      lastWpm = l.decoder.wpm;
+    }
+    const locked = session.phase === "warmup" ? "" : "（固定）";
+    speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
     pending.textContent = prettyCode(l.decoder.pendingCode);
     if (session.phase !== lastPhase) {
       lastPhase = session.phase;

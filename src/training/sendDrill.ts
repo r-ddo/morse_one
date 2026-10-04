@@ -3,15 +3,14 @@ import type { SendRecord } from "../storage/db";
 import { evaluateSend, isCorrection, type SendResult, type SentChar } from "./sendScoring";
 
 /**
- * warmup: VVV などを送って周波数と速度の推定を合わせている
+ * warmup: VVV を送って周波数と速度の推定を合わせている。V を正しく復号できたら、その周波数と速度で固定してよい
  * ready: 準備ができ、お題の最初の文字を待っている
  * sending: お題を送っている
  */
 export type SendPhase = "warmup" | "ready" | "sending" | "finished";
 
-/** 準備が済んだとみなす、慣らしの文字数と符号の数 */
-const WARMUP_CHARS = 3;
-const WARMUP_MARKS = 8;
+/** 準備が済んだとみなす、慣らしで正しく復号した V の数 */
+const WARMUP_VS = 2;
 /** 準備のあと、お題を始める前に置く無音（秒） */
 const READY_SILENCE = 1;
 /** お題を送り終えてから終了するまでの無音（秒） */
@@ -22,8 +21,7 @@ export class SendSession {
   readonly target: string;
   phase: SendPhase = "warmup";
   private readonly sent: SentChar[] = [];
-  private warmupChars = 0;
-  private warmupMarks = 0;
+  private warmupVs = 0;
   /** 最後にキーを上げた時刻（秒） */
   private lastActivity = 0;
   private cached: SendResult | null = null;
@@ -47,8 +45,7 @@ export class SendSession {
       if (e.type === "mark") this.lastActivity = now;
       if (e.type !== "char") continue;
       if (this.phase === "warmup") {
-        this.warmupChars++;
-        this.warmupMarks += e.marks.length;
+        if (e.char === "V") this.warmupVs++;
       } else if (this.phase === "ready" || this.phase === "sending") {
         this.phase = "sending";
         this.sent.push(e);
@@ -66,7 +63,7 @@ export class SendSession {
       return false;
     }
     const silence = now - this.lastActivity;
-    if (this.phase === "warmup" && this.warmupChars >= WARMUP_CHARS && this.warmupMarks >= WARMUP_MARKS) {
+    if (this.phase === "warmup" && this.warmupVs >= WARMUP_VS) {
       if (silence >= READY_SILENCE) return this.setPhase("ready");
     } else if (this.phase === "sending" && this.sentCount >= this.target.length && silence >= FINISH_SILENCE) {
       return this.setPhase("finished");

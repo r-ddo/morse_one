@@ -50,6 +50,12 @@ describe("SendSession", () => {
     expect(session.chars).toHaveLength(0);
   });
 
+  it("waits for V before getting ready", () => {
+    const session = new SendSession(["ABCDE"]);
+    play(session, new MorseDecoder(), at("EEE TTT", 0.2), 5);
+    expect(session.phase).toBe("warmup");
+  });
+
   it("stays in sending until the whole prompt is sent", () => {
     const session = new SendSession(["ABCDE", "FGHIJ"]);
     session.skipWarmup();

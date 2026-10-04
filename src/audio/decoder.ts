@@ -57,6 +57,8 @@ export class MorseDecoder {
   dot: number;
   /** 推定の伸び（秒） */
   bias = 0;
+  /** true なら短点長と伸びの推定を止める（練習機の速度は練習の途中で変わらないので、確認できたら固定する） */
+  speedLocked = false;
   private readonly recentMarks: number[] = [];
   /** 直近の間の長さ（符号内・文字間・語間すべて） */
   private readonly recentGaps: number[] = [];
@@ -142,6 +144,7 @@ export class MorseDecoder {
    * 両者の平均が短点長、差の半分が伸びになる。符号内の間がまだなければ、長点との差から求める
    */
   private estimate(): void {
+    if (this.speedLocked) return;
     const prevDotLike = this.dot + this.bias;
     const marks = splitClusters(withoutTiny(this.recentMarks));
     let dotLike: number | null = null;

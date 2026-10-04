@@ -12,6 +12,7 @@ import { keepScreenOn } from "./wakeLock";
 const options = {
   processing: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } as MicProcessing,
   autoFreq: true,
+  speedLocked: false,
   freq: 700,
 };
 
@@ -66,6 +67,11 @@ export function showLab(ctx: ScreenContext): void {
     autoInput.checked = false;
     session?.setFreq(v);
   });
+  const speedInput = h("input", { type: "checkbox", checked: options.speedLocked });
+  speedInput.addEventListener("change", () => {
+    options.speedLocked = speedInput.checked;
+    session?.setSpeedLocked(speedInput.checked);
+  });
   const autoInput = h("input", { type: "checkbox", checked: options.autoFreq });
   autoInput.addEventListener("change", () => {
     options.autoFreq = autoInput.checked;
@@ -110,6 +116,7 @@ export function showLab(ctx: ScreenContext): void {
         h("label", { class: "check" }, autoInput, h("span", {}, "周波数を自動検出")),
         freqRange,
       ),
+      h("label", { class: "check" }, speedInput, h("span", {}, "速度を今の推定で固定")),
     ),
     h("div", { class: "chart-card" },
       h("div", { class: "chart-head" },
@@ -188,6 +195,7 @@ class LabSession {
         onEnded,
       },
     );
+    listener.decoder.speedLocked = options.speedLocked;
     session = new LabSession(listener, view);
     return session;
   }
@@ -206,6 +214,10 @@ class LabSession {
 
   setAutoFreq(auto: boolean): void {
     this.listener.autoFreq = auto;
+  }
+
+  setSpeedLocked(locked: boolean): void {
+    this.listener.decoder.speedLocked = locked;
   }
 
   clear(): void {

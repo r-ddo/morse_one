@@ -12,6 +12,8 @@ export interface ListenerOptions {
   freq: number;
   /** スペクトルのピークから周波数を自動で合わせるか */
   autoFreq: boolean;
+  /** 速度の推定の初期値（WPM） */
+  wpm: number;
 }
 
 export interface ListenerHandlers {
@@ -50,6 +52,7 @@ export class KeyListener {
     private readonly handlers: ListenerHandlers,
   ) {
     this.detector = new KeyingDetector(mic.ctx.sampleRate, opts.freq);
+    this.decoder = new MorseDecoder(opts.wpm);
     this.autoFreq = opts.autoFreq;
     this.spectrum = new Float32Array(mic.analyser.frequencyBinCount);
     mic.track.addEventListener("ended", () => handlers.onEnded?.());
@@ -57,7 +60,7 @@ export class KeyListener {
 
   /** ユーザー操作のハンドラ内で呼ぶこと */
   static async open(opts: Partial<ListenerOptions>, handlers: ListenerHandlers): Promise<KeyListener> {
-    const full: ListenerOptions = { processing: QUIET_OPTIONS, freq: 700, autoFreq: true, ...opts };
+    const full: ListenerOptions = { processing: QUIET_OPTIONS, freq: 700, autoFreq: true, wpm: 20, ...opts };
     let listener: KeyListener | null = null;
     const mic = await MicCapture.open(full.processing, (s) => listener?.onSamples(s));
     listener = new KeyListener(mic, full, handlers);
@@ -94,9 +97,17 @@ export class KeyListener {
     this.freqLocked = true;
   }
 
-  /** 復号をやり直す。速度の推定は引き継ぐ */
+  /** 復号をやり直す。速度の推定（と固定）は引き継ぐ */
   resetDecoder(): void {
-    this.decoder = new MorseDecoder(this.decoder.wpm);
+    const { dot, bias, speedLocked } = this.decoder;
+    this.decoder = new MorseDecoder(1.2 / dot);
+    Object.assign(this.decoder, { bias, speedLocked });
+  }
+
+  /** 周波数と速度を今の値で固定する（自動での合わせ直しをすべて止める） */
+  lock(): void {
+    this.autoFreq = false;
+    this.decoder.speedLocked = true;
   }
 
   close(): void {
