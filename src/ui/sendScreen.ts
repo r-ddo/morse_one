@@ -9,6 +9,9 @@ import { field, select } from "./form";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
+/** 1 総通の欧文暗語は送受信とも 1 分間 80 字 */
+const EXAM_CPM = 80;
+
 /** 画面を開き直しても、検出に使った周波数は引き継ぐ */
 let lastFreq = 700;
 
@@ -36,10 +39,10 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
         s.charset,
         (v) => ctx.updateSettings({ charset: v as CharsetId }),
       )),
-      field("組数", select(
-        [5, 10, 20].map((v) => [String(v), `${v} 組（${v * 5} 字）`]),
-        String(s.sendGroups),
-        (v) => ctx.updateSettings({ sendGroups: Number(v) }),
+      field("字数", select(
+        [25, 50, 80, 100].map((v) => [String(v), `${v} 字（${v / 5} 組）${v === EXAM_CPM ? "・試験の 1 分間分" : ""}`]),
+        String(s.sendChars),
+        (v) => ctx.updateSettings({ sendChars: Number(v) }),
       )),
     ),
     h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx) }, "マイクを開始"),
@@ -63,8 +66,8 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
 async function startSend(ctx: ScreenContext): Promise<void> {
   // 再生用の AudioContext とマイク用が同時に動かないようにする
   ctx.player.release();
-  const { charset, sendGroups: count } = ctx.settings;
-  const session = new SendSession(sendGroups(count, charsetChars(charset)));
+  const { charset, sendChars } = ctx.settings;
+  const session = new SendSession(sendGroups(Math.ceil(sendChars / 5), charsetChars(charset)));
 
   const progress = h("div", { class: "progress" });
   const status = h("div", { class: "status" });

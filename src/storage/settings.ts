@@ -32,8 +32,8 @@ export interface Settings {
   mockCpm: number;
   /** 模擬試験の長さ（分） */
   mockMinutes: number;
-  /** 送信練習（グループ）の組数 */
-  sendGroups: number;
+  /** 送信練習のお題の字数（5 字 1 組） */
+  sendChars: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -53,7 +53,8 @@ export const DEFAULT_SETTINGS: Settings = {
   allowedLag: 1,
   mockCpm: 40,
   mockMinutes: 3,
-  sendGroups: 10,
+  // 試験（欧文暗語 80 字/分）の 1 分間分
+  sendChars: 80,
 };
 
 const KEY = "morse_one.settings";
@@ -65,6 +66,8 @@ export function loadSettings(): Settings {
       const saved = JSON.parse(raw) as Partial<Settings>;
       // 自動調整導入前の固定制限時間は短すぎるので引き継がない
       if (saved.autoLimit === undefined) delete saved.limitMs;
+      // 組数で指定していたころの設定。字数での指定（既定 80 字）に切り替える
+      delete (saved as { sendGroups?: number }).sendGroups;
       return { ...DEFAULT_SETTINGS, ...saved };
     }
   } catch {
