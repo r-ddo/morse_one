@@ -12,8 +12,22 @@ export type DecodeEvent =
   /** キーを上げていた間 */
   | { type: "gap"; kind: GapKind; duration: number; units: number }
   /** 文字の区切り。符号表にない符号なら char は null */
-  | { type: "char"; char: string | null; code: string }
+  | { type: "char"; char: string | null; code: string } & CharTiming
   | { type: "word" };
+
+/** 文字 1 つ分の符号の長さと時刻（秒） */
+export interface CharTiming {
+  /** 最初の符号を鳴らし始めた時刻 */
+  start: number;
+  /** 最後の符号を鳴らし終えた時刻 */
+  end: number;
+  /** 各符号の長さ */
+  marks: number[];
+  /** 符号内の間の長さ（marks.length − 1 個） */
+  gaps: number[];
+  /** 文字を確定したときの推定短点長 */
+  dot: number;
+}
 
 /** 速度推定に使う直近の符号の数 */
 const RECENT = 20;
@@ -35,9 +49,8 @@ export class MorseDecoder {
   private readonly elementGaps: number[] = [];
   /** 直近の、符号内より長い間（文字間・語間）の長さ */
   private readonly longGaps: number[] = [];
-  /** 確定していない符号の長さと、その間の長さ（gaps[i] は marks[i] と marks[i + 1] の間） */
-  private marks: number[] = [];
-  private gaps: number[] = [];
+  /** 確定していない符号の鳴り始めと鳴り終わりの時刻 */
+  private pending: { start: number; end: number }[] = [];
   private downAt: number | null = null;
   private upAt: number | null = null;
   private wordPending = false;
@@ -64,7 +77,7 @@ export class MorseDecoder {
 
   /** 文字として確定していない符号（例: ".-"） */
   get pendingCode(): string {
-    return this.marks.map((d) => this.classify(d)).join("");
+    return this.pending.map((m) => this.classify(m.end - m.start)).join("");
   }
 
   private classify(mark: number): "." | "-" {
@@ -82,7 +95,6 @@ export class MorseDecoder {
       const list = kind === "element" ? this.elementGaps : this.longGaps;
       list.push(duration);
       if (list.length > RECENT) list.shift();
-      if (this.marks.length > 0) this.gaps.push(duration);
     }
     this.downAt = t;
     return out;
@@ -96,7 +108,7 @@ export class MorseDecoder {
     this.recent.push(duration);
     if (this.recent.length > RECENT) this.recent.shift();
     this.dot = this.estimate();
-    this.marks.push(duration);
+    this.pending.push({ start: t - duration, end: t });
     this.wordPending = true;
     return [{ type: "mark", kind: this.classify(duration), duration, units: duration / this.dot }];
   }
@@ -118,7 +130,7 @@ export class MorseDecoder {
     const out: DecodeEvent[] = [];
     if (this.downAt !== null || this.upAt === null) return out;
     const silence = t - this.upAt;
-    if (this.marks.length > 0 && silence >= 2 * this.dot) out.push(...this.flush());
+    if (this.pending.length > 0 && silence >= 2 * this.dot) out.push(...this.flush());
     if (this.wordPending && silence >= this.wordThreshold) {
       out.push({ type: "word" });
       this.wordPending = false;
@@ -129,20 +141,25 @@ export class MorseDecoder {
   /** 確定していない符号を、今の推定で区切って文字にする */
   private flush(): DecodeEvent[] {
     const out: DecodeEvent[] = [];
-    let code = "";
-    const emit = () => out.push({ type: "char", char: FROM_CODE[code] ?? null, code });
-    this.marks.forEach((mark, i) => {
-      const gap = i > 0 ? this.gaps[i - 1] : 0;
-      if (gap >= 2 * this.dot) {
+    const dot = this.dot;
+    let group: { start: number; end: number }[] = [];
+    const emit = () => {
+      const marks = group.map((m) => m.end - m.start);
+      const code = marks.map((d) => this.classify(d)).join("");
+      const gaps = group.slice(1).map((m, i) => m.start - group[i].end);
+      out.push({ type: "char", char: FROM_CODE[code] ?? null, code, start: group[0].start, end: group.at(-1)!.end, marks, gaps, dot });
+    };
+    this.pending.forEach((m, i) => {
+      const gap = i > 0 ? m.start - this.pending[i - 1].end : 0;
+      if (gap >= 2 * dot) {
         emit();
         if (gap >= this.wordThreshold) out.push({ type: "word" });
-        code = "";
+        group = [];
       }
-      code += this.classify(mark);
+      group.push(m);
     });
     emit();
-    this.marks = [];
-    this.gaps = [];
+    this.pending = [];
     return out;
   }
 }

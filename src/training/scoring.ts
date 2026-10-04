@@ -17,61 +17,81 @@ export interface ExamScore {
   deduction: number;
 }
 
+/** 対応付けの 1 手。t は問題の位置、s は入力の位置（null はそちら側に対応がない） */
+export interface AlignStep {
+  t: number | null;
+  s: number | null;
+}
+
+export interface AlignCost {
+  /** 問題 t に入力 s を対応付ける */
+  pair(t: number, s: number): number;
+  /** 問題 t に対応する入力がない */
+  skipTarget(t: number): number;
+  /** 入力 s に対応する問題がない */
+  skipInput(s: number): number;
+}
+
+/** 費用の合計が最小になるように、長さ n の問題と長さ m の入力を先頭から対応付ける */
+export function align(n: number, m: number, cost: AlignCost): AlignStep[] {
+  // dp[i][j]: 問題 [0, i) と入力 [0, j) の最小費用
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) dp[i][0] = dp[i - 1][0] + cost.skipTarget(i - 1);
+  for (let j = 1; j <= m; j++) dp[0][j] = dp[0][j - 1] + cost.skipInput(j - 1);
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j - 1] + cost.pair(i - 1, j - 1),
+        dp[i - 1][j] + cost.skipTarget(i - 1),
+        dp[i][j - 1] + cost.skipInput(j - 1),
+      );
+    }
+  }
+  const steps: AlignStep[] = [];
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + cost.pair(i - 1, j - 1)) {
+      steps.push({ t: --i, s: --j });
+    } else if (i > 0 && dp[i][j] === dp[i - 1][j] + cost.skipTarget(i - 1)) {
+      steps.push({ t: --i, s: null });
+    } else {
+      steps.push({ t: null, s: --j });
+    }
+  }
+  return steps.reverse();
+}
+
 /**
  * 入力を問題文に対応付けて採点する。減点が最小になる対応付けを選ぶ
  * （1 字抜かしてもそれ以降がすべて誤字にならないようにするため）。
  * unknown は「聞き取れなかった」印で、脱字として扱う。
  */
 export function scoreExam(target: string, typed: string, unknown = "_"): ExamScore {
-  const n = target.length;
-  const m = typed.length;
-  // dp[i][j]: target[0..i) と typed[0..j) の最小減点
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  const extraCost = (c: string) => (c === unknown ? 0 : PENALTY.extra);
-  for (let i = 1; i <= n; i++) dp[i][0] = dp[i - 1][0] + PENALTY.missing;
-  for (let j = 1; j <= m; j++) dp[0][j] = dp[0][j - 1] + extraCost(typed[j - 1]);
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      const t = target[i - 1];
-      const c = typed[j - 1];
-      const sub = c === t ? 0 : c === unknown ? PENALTY.missing : PENALTY.wrong;
-      dp[i][j] = Math.min(
-        dp[i - 1][j - 1] + sub,
-        dp[i - 1][j] + PENALTY.missing,
-        dp[i][j - 1] + extraCost(c),
-      );
-    }
-  }
+  const sub = (t: string, c: string) => (c === t ? 0 : c === unknown ? PENALTY.missing : PENALTY.wrong);
+  const steps = align(target.length, typed.length, {
+    pair: (i, j) => sub(target[i], typed[j]),
+    skipTarget: () => PENALTY.missing,
+    skipInput: (j) => (typed[j] === unknown ? 0 : PENALTY.extra),
+  });
 
-  const marks: CharMark[] = new Array(n);
-  const typedAt: (string | null)[] = new Array(n).fill(null);
+  const marks: CharMark[] = new Array(target.length);
+  const typedAt: (string | null)[] = new Array(target.length).fill(null);
   let wrong = 0;
   let missing = 0;
   let extra = 0;
-  let i = n;
-  let j = m;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0) {
-      const t = target[i - 1];
-      const c = typed[j - 1];
-      const sub = c === t ? 0 : c === unknown ? PENALTY.missing : PENALTY.wrong;
-      if (dp[i][j] === dp[i - 1][j - 1] + sub) {
-        if (c === t) marks[i - 1] = "ok";
-        else if (c === unknown) (marks[i - 1] = "missing"), missing++;
-        else (marks[i - 1] = "wrong"), wrong++;
-        typedAt[i - 1] = c === unknown ? null : c;
-        i--;
-        j--;
-        continue;
-      }
-    }
-    if (i > 0 && dp[i][j] === dp[i - 1][j] + PENALTY.missing) {
-      marks[i - 1] = "missing";
+  for (const { t, s } of steps) {
+    if (t === null) {
+      if (typed[s!] !== unknown) extra++;
+    } else if (s === null) {
+      marks[t] = "missing";
       missing++;
-      i--;
     } else {
-      if (typed[j - 1] !== unknown) extra++;
-      j--;
+      const c = typed[s];
+      if (c === target[t]) marks[t] = "ok";
+      else if (c === unknown) (marks[t] = "missing"), missing++;
+      else (marks[t] = "wrong"), wrong++;
+      typedAt[t] = c === unknown ? null : c;
     }
   }
   return {

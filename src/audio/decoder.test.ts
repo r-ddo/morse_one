@@ -3,6 +3,7 @@ import { MorseDecoder, estimateDot, type DecodeEvent } from "./decoder";
 import { KeyingDetector, findTonePeak } from "./keying";
 import { toIntervals } from "./player";
 import { farnsworth } from "./timing";
+import { evaluateSend, type SentChar } from "../training/sendScoring";
 
 const RATE = 48000;
 
@@ -42,14 +43,22 @@ function synth(intervals: [number, number][], freq: number, amp: number, noise: 
 }
 
 /** 波形を chunk サンプルずつ流して復元した文字列 */
-function decodeSignal(signal: Float32Array, freq: number, initialWpm = 20, chunk = 1024): { text: string; decoder: MorseDecoder } {
+function decodeSignal(
+  signal: Float32Array,
+  freq: number,
+  initialWpm = 20,
+  chunk = 1024,
+): { text: string; decoder: MorseDecoder; chars: SentChar[] } {
   const detector = new KeyingDetector(RATE, freq);
   const decoder = new MorseDecoder(initialWpm);
   let text = "";
+  const chars: SentChar[] = [];
   const apply = (events: DecodeEvent[]) => {
     for (const e of events) {
-      if (e.type === "char") text += e.char ?? "*";
-      else if (e.type === "word") text += " ";
+      if (e.type === "char") {
+        text += e.char ?? "*";
+        chars.push(e);
+      } else if (e.type === "word") text += " ";
     }
   };
   for (let i = 0; i < signal.length; i += chunk) {
@@ -57,7 +66,7 @@ function decodeSignal(signal: Float32Array, freq: number, initialWpm = 20, chunk
     for (const e of events) apply(e.down ? decoder.keyDown(e.t) : decoder.keyUp(e.t));
     apply(decoder.tick(detector.time));
   }
-  return { text: text.trim(), decoder };
+  return { text: text.trim(), decoder, chars };
 }
 
 describe("MorseDecoder", () => {
@@ -90,6 +99,16 @@ describe("MorseDecoder", () => {
   it("starts cleanly after digital silence", () => {
     const signal = synth(toIntervals("CQ CQ DE JA1ABC K", farnsworth(22, 22)), 650, 0.3, 0.02, { silence: 0.5, ramp: 0.005 });
     expect(decodeSignal(signal, 650).text).toBe("CQ CQ DE JA1ABC K");
+  });
+
+  it("feeds sending evaluation with character timings", () => {
+    const signal = synth(toIntervals("ABCDE FGHIJ KLMNO", farnsworth(20, 20)), 700, 0.3, 0.02, { ramp: 0.005 });
+    const { score, quality } = evaluateSend("ABCDEFGHIJKLMNO", decodeSignal(signal, 700).chars);
+    expect(score.deduction).toBe(0);
+    expect(quality.charGap!.mean).toBeCloseTo(3, 0);
+    expect(quality.wordGap!.mean).toBeCloseTo(7, 0);
+    expect(quality.dashRatio!).toBeCloseTo(3, 0);
+    expect(quality.notes).toEqual([]);
   });
 
   it("ignores a tone at another frequency", () => {
