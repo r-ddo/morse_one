@@ -78,6 +78,14 @@ describe("evaluateSend", () => {
     expect(evaluateSend("ABCDEFGHIJ", sent).score).toMatchObject({ unsent: 0, missing: 3, deduction: 9 });
   });
 
+  it("aligns a partial send to the beginning of the prompt while sending", () => {
+    // 末尾の未送を脱字として数えると、Z を後ろの組の Z に対応付けても同点になってしまう
+    const { score } = evaluateSend("AOQXCMOPUBTZBSLKYKYZ", sendText("AOQXC MOEUB TZ"), { live: true });
+    expect(score.sentAt.slice(10, 12)).toEqual(["T", "Z"]);
+    expect(score.marks.slice(0, 12).filter((m) => m !== "ok")).toEqual(["wrong"]);
+    expect(score.missing).toBe(0);
+  });
+
   it("charges 1 point for an unclear character", () => {
     const sent = sendText("ABCD");
     // A の短点が長点の 0.6 倍

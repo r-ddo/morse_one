@@ -73,6 +73,8 @@ export interface SendResult {
 export interface SendOptions {
   /** 時間制（模擬試験）。お題の最後のほうで送っていない字を脱字ではなく未送信とする */
   timed?: boolean;
+  /** 送信の途中。お題の最後のほうで送っていない字は、まだ送っていないだけとして減点しない */
+  live?: boolean;
   /** 1 組の字数（語間の判定に使う） */
   groupLen?: number;
 }
@@ -103,8 +105,9 @@ interface Kept {
 /** 送信をお題に対応付けて採点し、符号の質を分析する */
 export function evaluateSend(target: string, sent: readonly SentChar[], opts: SendOptions = {}): SendResult {
   const groupLen = opts.groupLen ?? 5;
-  const { kept, corrections } = applyCorrections(target, sent);
-  const steps = alignSent(target, kept.map((k) => k.c));
+  const tail = opts.live ? () => 0 : opts.timed ? (count: number) => Math.ceil(count / 2) : undefined;
+  const { kept, corrections } = applyCorrections(target, sent, tail);
+  const steps = alignSent(target, kept.map((k) => k.c), tail);
 
   const n = target.length;
   const marks: SendMark[] = new Array(n);
@@ -141,9 +144,9 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
     }
   }
 
-  // 時間切れで送れなかった末尾は、脱字ではなく未送信
+  // 時間切れで送れなかった（送信の途中ならまだ送っていない）末尾は、脱字ではなく未送信
   let unsent = 0;
-  if (opts.timed) {
+  if (tail) {
     for (let t = n - 1; t >= 0 && marks[t] === "missing"; t--) {
       marks[t] = "unsent";
       unsent++;
@@ -168,7 +171,7 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
   const deduction =
     (wrong * SEND_PENALTY.wrong + missing * SEND_PENALTY.missing + extra * SEND_PENALTY.extra) +
     unclear * SEND_PENALTY.unclear +
-    Math.ceil(unsent / 2) +
+    (opts.live ? 0 : Math.ceil(unsent / 2)) +
     Math.ceil(corrections / 3) +
     longCharGaps +
     longWordGaps;
@@ -193,17 +196,23 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
   };
 }
 
-function alignSent(target: string, chars: readonly SentChar[]) {
+type TailCost = ((count: number) => number) | undefined;
+
+function alignSent(target: string, chars: readonly SentChar[], tail: TailCost) {
   return align(target.length, chars.length, {
     pair: (t, s) => (chars[s].char === target[t] ? 0 : SEND_PENALTY.wrong),
     skipTarget: () => SEND_PENALTY.missing,
     skipInput: () => SEND_PENALTY.extra,
+    tail,
   });
 }
 
-function alignCost(target: string, chars: readonly SentChar[]): number {
-  let cost = 0;
-  for (const { t, s } of alignSent(target, chars)) {
+function alignCost(target: string, chars: readonly SentChar[], tail: TailCost): number {
+  const steps = alignSent(target, chars, tail);
+  let last = steps.length;
+  if (tail) while (last > 0 && steps[last - 1].s === null) last--;
+  let cost = tail ? tail(steps.length - last) : 0;
+  for (const { t, s } of steps.slice(0, last)) {
     if (t === null) cost += SEND_PENALTY.extra;
     else if (s === null) cost += SEND_PENALTY.missing;
     else if (chars[s].char !== target[t]) cost += SEND_PENALTY.wrong;
@@ -216,7 +225,7 @@ function alignCost(target: string, chars: readonly SentChar[]): number {
  * 規則上は 2、3 字前に戻って送り直すはずだが、実際に何字戻ったかは分からないので、
  * 訂正符号ごとに先頭から順に 0〜MAX_UNDO 字を試し、お題との減点が最小になる字数を選ぶ
  */
-function applyCorrections(target: string, sent: readonly SentChar[]): { kept: Kept[]; corrections: number } {
+function applyCorrections(target: string, sent: readonly SentChar[], tail: TailCost): { kept: Kept[]; corrections: number } {
   let kept: Kept[] = [];
   let corrections = 0;
   let afterCorrection = false;
@@ -234,7 +243,7 @@ function applyCorrections(target: string, sent: readonly SentChar[]): { kept: Ke
     let bestCost = Infinity;
     for (let k = 0; k <= Math.min(MAX_UNDO, kept.length); k++) {
       const chars = [...kept.slice(0, kept.length - k).map((x) => x.c), ...rest];
-      const cost = alignCost(target, chars);
+      const cost = alignCost(target, chars, tail);
       if (cost < bestCost) {
         bestCost = cost;
         best = k;

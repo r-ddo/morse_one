@@ -24,7 +24,7 @@ export interface Attempt {
 }
 
 const DB_NAME = "morse_one";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -40,6 +40,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (e.oldVersion < 2) {
         db.createObjectStore("mocks", { keyPath: "id", autoIncrement: true });
+      }
+      if (e.oldVersion < 3) {
+        db.createObjectStore("sends", { keyPath: "id", autoIncrement: true });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -132,6 +135,56 @@ export async function loadMocks(): Promise<MockResult[]> {
   return (req.result as MockResult[]).sort((a, b) => b.ts - a.ts);
 }
 
+/** 送信練習の結果 */
+export interface SendRecord {
+  id?: number;
+  ts: number;
+  mode: "group" | "mock";
+  /** お題（空白なし） */
+  target: string;
+  /** 復号した文字。符号表にない符号は符号のまま（訂正符号を含む） */
+  sent: string[];
+  charset: string;
+  wrong: number;
+  missing: number;
+  extra: number;
+  unclear: number;
+  unsent: number;
+  corrections: number;
+  longCharGaps: number;
+  longWordGaps: number;
+  deduction: number;
+  points: number;
+  /** 送信速度（字/分） */
+  cpm: number | null;
+  /** 推定した符号の速度（WPM） */
+  wpm: number;
+  dashRatio: number | null;
+  /** 文字間・語間の平均（短点単位）とばらつき（変動係数） */
+  charGap: number | null;
+  charGapCv: number | null;
+  wordGap: number | null;
+  wordGapCv: number | null;
+  /** 模擬試験の長さ（分） */
+  minutes?: number;
+}
+
+export async function saveSend(record: SendRecord): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction("sends", "readwrite");
+  tx.objectStore("sends").add(record);
+  await done(tx);
+}
+
+/** 新しい順 */
+export async function loadSends(): Promise<SendRecord[]> {
+  const db = await openDb();
+  const tx = db.transaction("sends", "readonly");
+  const req = tx.objectStore("sends").getAll();
+  await done(tx);
+  return (req.result as SendRecord[]).sort((a, b) => b.ts - a.ts);
+}
+
 export async function loadAttempts(): Promise<Attempt[]> {
   const db = await openDb();
   const tx = db.transaction("attempts", "readonly");
@@ -144,34 +197,40 @@ export interface StoredData {
   attempts: Attempt[];
   charStats: CharStat[];
   mocks: MockResult[];
+  sends: SendRecord[];
 }
 
 export async function loadAll(): Promise<StoredData> {
   const db = await openDb();
-  const tx = db.transaction(["attempts", "charStats", "mocks"], "readonly");
+  const tx = db.transaction(["attempts", "charStats", "mocks", "sends"], "readonly");
   const attempts = tx.objectStore("attempts").getAll();
   const charStats = tx.objectStore("charStats").getAll();
   const mocks = tx.objectStore("mocks").getAll();
+  const sends = tx.objectStore("sends").getAll();
   await done(tx);
   return {
     attempts: attempts.result as Attempt[],
     charStats: charStats.result as CharStat[],
     mocks: mocks.result as MockResult[],
+    sends: sends.result as SendRecord[],
   };
 }
 
 /** 保存されているデータをすべて置き換える（1 つのトランザクションで行い、失敗したら元のまま） */
 export async function replaceAll(data: StoredData): Promise<void> {
   const db = await openDb();
-  const tx = db.transaction(["attempts", "charStats", "mocks"], "readwrite");
+  const tx = db.transaction(["attempts", "charStats", "mocks", "sends"], "readwrite");
   const attempts = tx.objectStore("attempts");
   const charStats = tx.objectStore("charStats");
   const mocks = tx.objectStore("mocks");
+  const sends = tx.objectStore("sends");
   attempts.clear();
   charStats.clear();
   mocks.clear();
+  sends.clear();
   for (const a of data.attempts) attempts.put(a);
   for (const s of data.charStats) charStats.put(s);
   for (const m of data.mocks) mocks.put(m);
+  for (const r of data.sends) sends.put(r);
   await done(tx);
 }

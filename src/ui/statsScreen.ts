@@ -154,7 +154,7 @@ async function importBackup(file: File, message: HTMLElement): Promise<void> {
     const backup = parseBackup(await file.text());
     const when = new Date(backup.exportedAt).toLocaleString("ja-JP");
     const ok = confirm(
-      `${when} に書き出したデータ（解答 ${backup.attempts.length} 件・模擬試験 ${backup.mocks.length} 件）で、` +
+      `${when} に書き出したデータ（解答 ${backup.attempts.length} 件・模擬試験 ${backup.mocks.length} 件・送信 ${backup.sends.length} 件）で、` +
       "今のデータと設定をすべて置き換えます。よろしいですか？",
     );
     if (!ok) return;

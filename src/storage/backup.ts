@@ -1,9 +1,10 @@
-import type { Attempt, MockResult, StoredData } from "./db";
+import type { Attempt, MockResult, SendRecord, StoredData } from "./db";
 import type { Settings } from "./settings";
 import type { CharStat } from "../training/stats";
 
 export const BACKUP_APP = "morse_one";
-export const BACKUP_VERSION = 1;
+/** 2: 送信練習の記録（sends）を追加 */
+export const BACKUP_VERSION = 2;
 
 export interface Backup extends StoredData {
   app: typeof BACKUP_APP;
@@ -35,6 +36,10 @@ function isMock(v: unknown): v is MockResult {
   return isObject(v) && typeof v.ts === "number" && typeof v.score === "number";
 }
 
+function isSend(v: unknown): v is SendRecord {
+  return isObject(v) && typeof v.ts === "number" && typeof v.target === "string" && typeof v.points === "number";
+}
+
 /** バックアップファイルの内容を検証する。問題があれば日本語のメッセージで例外を投げる */
 export function parseBackup(text: string): Backup {
   let json: unknown;
@@ -47,10 +52,12 @@ export function parseBackup(text: string): Backup {
   if (typeof json.version !== "number" || json.version > BACKUP_VERSION) {
     throw new Error("新しいバージョンのアプリで作られたバックアップです");
   }
-  const { attempts, charStats, mocks, settings } = json;
+  // バージョン 1 には送信練習の記録がない
+  const { attempts, charStats, mocks, settings, sends = [] } = json;
   if (!Array.isArray(attempts) || !attempts.every(isAttempt)) throw new Error("解答の記録が壊れています");
   if (!Array.isArray(charStats) || !charStats.every(isCharStat)) throw new Error("文字ごとの成績が壊れています");
   if (!Array.isArray(mocks) || !mocks.every(isMock)) throw new Error("模擬試験の記録が壊れています");
+  if (!Array.isArray(sends) || !sends.every(isSend)) throw new Error("送信練習の記録が壊れています");
   if (!isObject(settings)) throw new Error("設定が壊れています");
-  return json as unknown as Backup;
+  return { ...json, sends } as unknown as Backup;
 }

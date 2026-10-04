@@ -32,6 +32,8 @@ export interface Settings {
   mockCpm: number;
   /** 模擬試験の長さ（分） */
   mockMinutes: number;
+  /** 送信練習（グループ）の組数 */
+  sendGroups: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -51,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   allowedLag: 1,
   mockCpm: 40,
   mockMinutes: 3,
+  sendGroups: 10,
 };
 
 const KEY = "morse_one.settings";

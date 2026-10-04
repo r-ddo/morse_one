@@ -6,6 +6,7 @@ const data = {
   attempts: [{ ts: 1, mode: "single" as const, target: "A", answer: "A", correct: true, rtMs: 300, cwpm: 25, freq: 650 }],
   charStats: [{ char: "A", attempts: 1, correct: 1, accEma: 1, rtEma: 300, lastSeen: 1 }],
   mocks: [],
+  sends: [],
 };
 
 describe("backup", () => {
@@ -27,6 +28,11 @@ describe("backup", () => {
     const b = makeBackup(data, DEFAULT_SETTINGS);
     const broken = { ...b, attempts: [{ ts: "x" }] };
     expect(() => parseBackup(JSON.stringify(broken))).toThrow("解答の記録が壊れています");
+  });
+
+  it("reads version 1 backups without sending records", () => {
+    const { sends: _, ...v1 } = { ...makeBackup(data, DEFAULT_SETTINGS), version: 1 };
+    expect(parseBackup(JSON.stringify(v1)).sends).toEqual([]);
   });
 
   it("rejects backups from a newer version", () => {

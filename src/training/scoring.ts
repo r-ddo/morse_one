@@ -30,6 +30,11 @@ export interface AlignCost {
   skipTarget(t: number): number;
   /** 入力 s に対応する問題がない */
   skipInput(s: number): number;
+  /**
+   * 問題の末尾の count 字に対応する入力がないときの費用（まだ送っていない・時間切れなど）。
+   * 指定しなければ skipTarget の合計
+   */
+  tail?(count: number): number;
 }
 
 /** 費用の合計が最小になるように、長さ n の問題と長さ m の入力を先頭から対応付ける */
@@ -49,6 +54,17 @@ export function align(n: number, m: number, cost: AlignCost): AlignStep[] {
   }
   const steps: AlignStep[] = [];
   let i = n;
+  if (cost.tail) {
+    let best = Infinity;
+    for (let k = n; k >= 0; k--) {
+      const c = dp[k][m] + cost.tail(n - k);
+      if (c < best) {
+        best = c;
+        i = k;
+      }
+    }
+    for (let t = n - 1; t >= i; t--) steps.push({ t, s: null });
+  }
   let j = m;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + cost.pair(i - 1, j - 1)) {

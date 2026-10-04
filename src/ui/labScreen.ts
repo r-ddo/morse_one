@@ -1,6 +1,7 @@
-import { MorseDecoder, type DecodeEvent, type GapKind } from "../audio/decoder";
-import { KeyingDetector, findTonePeak, type DetectorFrame } from "../audio/keying";
-import { MicCapture, type MicProcessing } from "../audio/mic";
+import type { DecodeEvent, GapKind } from "../audio/decoder";
+import type { DetectorFrame } from "../audio/keying";
+import { FREQ_MAX, FREQ_MIN, KeyListener } from "../audio/listener";
+import type { MicProcessing } from "../audio/mic";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { range } from "./form";
@@ -22,9 +23,6 @@ const PROCESSING_LABELS: [keyof MicProcessing, string][] = [
 
 /** 波形表示の長さ（秒） */
 const HISTORY_SEC = 4;
-/** 自動検出で探す周波数の範囲（Hz） */
-const FREQ_MIN = 300;
-const FREQ_MAX = 1500;
 /** 統計に使う直近の符号・間の数 */
 const STATS_WINDOW = 60;
 
@@ -68,7 +66,10 @@ export function showLab(ctx: ScreenContext): void {
     session?.setFreq(v);
   });
   const autoInput = h("input", { type: "checkbox", checked: options.autoFreq });
-  autoInput.addEventListener("change", () => (options.autoFreq = autoInput.checked));
+  autoInput.addEventListener("change", () => {
+    options.autoFreq = autoInput.checked;
+    session?.setAutoFreq(autoInput.checked);
+  });
 
   const view: LabView = {
     lamp: h("div", { class: "lamp" }),
@@ -158,52 +159,54 @@ export function showLab(ctx: ScreenContext): void {
 }
 
 class LabSession {
-  private readonly detector: KeyingDetector;
-  private decoder = new MorseDecoder();
   private frames: DetectorFrame[] = [];
-  private readonly spectrum: Float32Array<ArrayBuffer>;
-  private freqCandidates: number[] = [];
   private text = "";
   private marks: { kind: "." | "-"; units: number }[] = [];
   private gaps: { kind: GapKind; units: number }[] = [];
-  private rmsDb = -Infinity;
-  private peakDb = -Infinity;
-  private peakAt = 0;
   private raf = 0;
   private releaseScreen: () => void = () => {};
 
   private constructor(
-    private readonly mic: MicCapture,
+    private readonly listener: KeyListener,
     private readonly view: LabView,
   ) {
-    this.detector = new KeyingDetector(mic.ctx.sampleRate, options.freq);
-    this.spectrum = new Float32Array(mic.analyser.frequencyBinCount);
     void keepScreenOn().then((release) => (this.releaseScreen = release));
     this.raf = requestAnimationFrame(this.draw);
   }
 
   static async start(view: LabView, onEnded: () => void): Promise<LabSession> {
     let session: LabSession | null = null;
-    const mic = await MicCapture.open(options.processing, (s) => session?.onSamples(s));
-    session = new LabSession(mic, view);
-    mic.track.addEventListener("ended", onEnded);
+    const listener = await KeyListener.open(
+      { processing: options.processing, freq: options.freq, autoFreq: options.autoFreq },
+      {
+        onEvents: (events) => session?.apply(events),
+        onFrames: (frames) => session?.addFrames(frames),
+        onFreq: (freq) => (options.freq = Math.round(freq)),
+        onEnded,
+      },
+    );
+    session = new LabSession(listener, view);
     return session;
   }
 
   close(): void {
     cancelAnimationFrame(this.raf);
     this.releaseScreen();
-    this.mic.close();
+    this.listener.close();
     this.view.lamp.classList.remove("on");
   }
 
   setFreq(freq: number): void {
-    this.detector.setFreq(freq);
-    this.freqCandidates = [];
+    this.listener.autoFreq = false;
+    this.listener.setFreq(freq);
+  }
+
+  setAutoFreq(auto: boolean): void {
+    this.listener.autoFreq = auto;
   }
 
   clear(): void {
-    this.decoder = new MorseDecoder(this.decoder.wpm);
+    this.listener.resetDecoder();
     this.text = "";
     this.marks = [];
     this.gaps = [];
@@ -211,7 +214,8 @@ class LabSession {
 
   /** 要求した音声処理と、実際に適用された設定 */
   describe(): HTMLElement {
-    const track = this.mic.track;
+    const { mic } = this.listener;
+    const track = mic.track;
     const settings = track.getSettings() as Partial<Record<keyof MicProcessing, boolean>> & MediaTrackSettings;
     const supported = navigator.mediaDevices.getSupportedConstraints() as Partial<Record<keyof MicProcessing, boolean>>;
     const onOff = (v: boolean) => (v ? "オン" : "オフ");
@@ -220,36 +224,17 @@ class LabSession {
       const shown = actual === undefined ? (supported[key] ? "不明" : "指定できない") : onOff(actual);
       return [label, `要求 ${onOff(options.processing[key])} → 実際 ${shown}`];
     });
-    const ctx = this.mic.ctx;
     rows.push(["入力", track.label || "（名前なし）"]);
-    rows.push(["サンプリング周波数", `${ctx.sampleRate} Hz`]);
-    if (ctx.baseLatency !== undefined) rows.push(["出力の基本遅延", `${(ctx.baseLatency * 1000).toFixed(1)} ms`]);
+    rows.push(["サンプリング周波数", `${mic.ctx.sampleRate} Hz`]);
+    if (mic.ctx.baseLatency !== undefined) rows.push(["出力の基本遅延", `${(mic.ctx.baseLatency * 1000).toFixed(1)} ms`]);
     return h("table", { class: "lab-table" },
       ...rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))));
   }
 
-  private onSamples(samples: Float32Array): void {
-    let sum = 0;
-    let peak = 0;
-    for (const x of samples) {
-      sum += x * x;
-      peak = Math.max(peak, Math.abs(x));
-    }
-    const now = this.detector.time;
-    this.rmsDb = 10 * Math.log10(sum / samples.length + 1e-12);
-    const peakDb = 20 * Math.log10(peak + 1e-12);
-    if (peakDb >= this.peakDb || now - this.peakAt > 1) {
-      this.peakDb = peakDb;
-      this.peakAt = now;
-    }
-
-    const { events, frames } = this.detector.process(samples);
-    for (const e of events) this.apply(e.down ? this.decoder.keyDown(e.t) : this.decoder.keyUp(e.t));
-    this.apply(this.decoder.tick(this.detector.time));
+  private addFrames(frames: DetectorFrame[]): void {
     this.frames.push(...frames);
-    if (this.frames.length > 0 && this.frames[0].t < now - 2 * HISTORY_SEC) {
-      this.frames = this.frames.filter((f) => f.t >= now - HISTORY_SEC);
-    }
+    const now = this.listener.now;
+    if (this.frames[0].t < now - 2 * HISTORY_SEC) this.frames = this.frames.filter((f) => f.t >= now - HISTORY_SEC);
   }
 
   private apply(events: DecodeEvent[]): void {
@@ -276,42 +261,24 @@ class LabSession {
 
   private readonly draw = (): void => {
     this.raf = requestAnimationFrame(this.draw);
-    const { view, detector } = this;
-    const binHz = this.mic.ctx.sampleRate / this.mic.analyser.fftSize;
-    this.mic.analyser.getFloatFrequencyData(this.spectrum);
-    if (options.autoFreq) this.trackFreq(binHz);
+    const { view, listener } = this;
+    const { detector } = listener;
 
     view.lamp.classList.toggle("on", detector.keyDown);
-    setText(view.wpm, this.marks.length > 0 ? `${this.decoder.wpm.toFixed(1)} WPM` : "―");
+    setText(view.wpm, this.marks.length > 0 ? `${listener.decoder.wpm.toFixed(1)} WPM` : "―");
     setText(view.freq, `${Math.round(detector.freq)} Hz`);
-    setText(view.level, Number.isFinite(this.rmsDb) ? `${Math.round(this.rmsDb)} dBFS` : "―");
-    view.level.title = `ピーク ${Math.round(this.peakDb)} dBFS`;
+    setText(view.level, Number.isFinite(listener.rmsDb) ? `${Math.round(listener.rmsDb)} dBFS` : "―");
     if (document.activeElement !== view.freqInput) {
       view.freqInput.value = String(Math.round(detector.freq));
       setText(view.freqValue, `${Math.round(detector.freq)} Hz`);
     }
     setText(view.text, this.text);
-    setText(view.pending, prettyCode(this.decoder.pendingCode));
+    setText(view.pending, prettyCode(listener.decoder.pendingCode));
     this.renderStats();
 
-    drawEnvelope(view.envelope, this.frames, detector.time);
-    drawSpectrum(view.spectrum, this.spectrum, binHz, detector.freq);
+    drawEnvelope(view.envelope, this.frames, listener.now);
+    drawSpectrum(view.spectrum, listener.lastSpectrum, listener.binHz, detector.freq);
   };
-
-  /** スペクトルのはっきりしたピークを集め、その中央値に検出の周波数を合わせる */
-  private trackFreq(binHz: number): void {
-    const peak = findTonePeak(this.spectrum, binHz, FREQ_MIN, FREQ_MAX);
-    if (!peak || peak.snrDb < 20) return;
-    this.freqCandidates.push(peak.freq);
-    if (this.freqCandidates.length > 15) this.freqCandidates.shift();
-    if (this.freqCandidates.length < 8) return;
-    const sorted = [...this.freqCandidates].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)];
-    if (Math.abs(median - this.detector.freq) > 10) {
-      this.detector.setFreq(median);
-      options.freq = Math.round(median);
-    }
-  }
 
   private renderStats(): void {
     const marks = this.marks.slice(-STATS_WINDOW);

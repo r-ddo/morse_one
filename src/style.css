@@ -778,3 +778,83 @@ svg.chart {
 .lab-pending {
   color: var(--muted);
 }
+
+.send-monitor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lamp.small {
+  width: 20px;
+  height: 20px;
+}
+
+.send-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.2em, 1fr));
+  gap: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.send-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.send-target,
+.send-sent {
+  display: flex;
+  justify-content: space-between;
+}
+
+.send-target span,
+.send-sent span {
+  width: 1.1em;
+  text-align: center;
+}
+
+.send-target {
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.send-target .current {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+}
+
+.send-sent {
+  font-size: 1.05rem;
+  min-height: 1.4em;
+  color: var(--muted);
+}
+
+.send-sent .ok {
+  color: var(--ok);
+}
+
+.send-sent .ng {
+  color: var(--ng);
+  font-weight: 700;
+}
+
+.send-sent .unclear {
+  color: var(--slow);
+  font-weight: 700;
+}
+
+.send-pending {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.4rem;
+  min-height: 1.5em;
+  text-align: center;
+  color: var(--muted);
+}
+
+.send-notes {
+  margin: 8px 0 0;
+  padding-left: 1.2em;
+}
