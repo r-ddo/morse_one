@@ -881,3 +881,38 @@ svg.chart {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+
+.tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tabs button {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  padding: 10px;
+}
+
+.tabs button + button {
+  border-left: 1px solid var(--border);
+}
+
+.tabs button.selected {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stats-section[hidden] {
+  display: none;
+}
