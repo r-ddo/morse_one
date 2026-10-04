@@ -47,7 +47,7 @@ export interface Spread {
   n: number;
 }
 
-/** 符号の質。長さは推定短点長を 1 とした値 */
+/** 符号の質。長さは推定短点長を 1 とし、残響などによる伸びを補正した値 */
 export interface SendQuality {
   dot: Spread | null;
   dash: Spread | null;
@@ -160,7 +160,7 @@ export function evaluateSend(target: string, sent: readonly SentChar[], opts: Se
   for (let i = 1; i < kept.length; i++) {
     if (kept[i].afterCorrection) continue;
     const c = kept[i].c;
-    const units = (c.start - kept[i - 1].c.end) / c.dot;
+    const units = (c.start - kept[i - 1].c.end + c.bias) / c.dot;
     const t = targetOf[i];
     const isWord = t !== null ? t % groupLen === 0 : units >= SHORT_WORD_GAP;
     (isWord ? wordGaps : charGaps).push(units);
@@ -254,17 +254,18 @@ function applyCorrections(target: string, sent: readonly SentChar[], tail: TailC
   return { kept, corrections };
 }
 
-/** 1 符号の中に、すぐ近くの長点の 1/2〜2/3 の長さの符号があるか */
+/** 1 符号の中に、すぐ近くの長点の 1/2〜2/3 の長さの符号があるか（伸びを補正して比べる） */
 export function isUnclear(c: CharTiming): boolean {
-  const isDash = c.marks.map((d) => d >= 2 * c.dot);
-  return c.marks.some((d, i) => {
+  const marks = c.marks.map((d) => d - c.bias);
+  const isDash = marks.map((d) => d >= 2 * c.dot);
+  return marks.some((d, i) => {
     let nearest = -1;
-    for (let j = 0; j < c.marks.length; j++) {
+    for (let j = 0; j < marks.length; j++) {
       if (j === i || !isDash[j]) continue;
       if (nearest < 0 || Math.abs(j - i) < Math.abs(nearest - i)) nearest = j;
     }
     if (nearest < 0) return false;
-    const ratio = d / c.marks[nearest];
+    const ratio = d / marks[nearest];
     return ratio >= 1 / 2 && ratio <= 2 / 3;
   });
 }
@@ -281,8 +282,8 @@ function analyze(chars: readonly SentChar[], charGaps: number[], wordGaps: numbe
   const dashes: number[] = [];
   const elements: number[] = [];
   for (const c of chars) {
-    c.marks.forEach((d) => (d >= 2 * c.dot ? dashes : dots).push(d / c.dot));
-    c.gaps.forEach((g) => elements.push(g / c.dot));
+    c.marks.forEach((d) => (d - c.bias >= 2 * c.dot ? dashes : dots).push((d - c.bias) / c.dot));
+    c.gaps.forEach((g) => elements.push((g + c.bias) / c.dot));
   }
   const dot = spread(dots);
   const dash = spread(dashes);

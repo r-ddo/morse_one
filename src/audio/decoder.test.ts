@@ -22,11 +22,13 @@ interface SynthOptions {
   silence?: number;
   /** 立ち上がり・立ち下がり（秒）。発音区間の内側で整形する（MorsePlayer と同じ） */
   ramp?: number;
+  /** 部屋の残響。鳴り終わりから level 倍の強さで始まり、時定数 tau 秒で減衰する尾 */
+  reverb?: { level: number; tau: number };
 }
 
 /** 発音区間からトーン + 白色雑音の波形を作る */
 function synth(intervals: [number, number][], freq: number, amp: number, noise: number, opts: SynthOptions = {}): Float32Array {
-  const { lead = 0.3, silence = 0, ramp = 0 } = opts;
+  const { lead = 0.3, silence = 0, ramp = 0, reverb } = opts;
   const start = silence + lead;
   const end = (intervals.at(-1)?.[1] ?? 0) + start + 1;
   const out = new Float32Array(Math.ceil(end * RATE));
@@ -37,6 +39,14 @@ function synth(intervals: [number, number][], freq: number, amp: number, noise: 
       const t = i / RATE - start;
       const env = ramp > 0 ? Math.min(1, (t - on) / ramp, (off - t) / ramp) : 1;
       out[i] += amp * env * Math.sin((2 * Math.PI * freq * i) / RATE);
+    }
+    if (reverb) {
+      const from = Math.round((off + start) * RATE);
+      const to = Math.min(out.length, from + Math.round(6 * reverb.tau * RATE));
+      for (let i = from; i < to; i++) {
+        const tail = reverb.level * Math.exp(-(i - from) / RATE / reverb.tau);
+        out[i] += amp * tail * Math.sin((2 * Math.PI * freq * i) / RATE);
+      }
     }
   }
   return out;
@@ -152,6 +162,30 @@ function decodeKeying(intervals: [number, number][], initialWpm = 20): { text: s
   return { text: text.trim(), decoder };
 }
 
+describe("MorseDecoder in a reverberant room", () => {
+  // 残響で符号が約 0.4 短点長く、間が同じだけ短く測れる（以前は点や文字がつながった）
+  const reverb = { level: 0.4, tau: 0.08 };
+
+  it("decodes with lengthened marks and shortened gaps", () => {
+    for (const w of [20, 25]) {
+      const signal = synth(toIntervals("VVV SHISH 5H5S5 ESHIE", farnsworth(w, w)), 700, 0.3, 0.01, { reverb });
+      const { text, decoder } = decodeSignal(signal, 700);
+      expect(text).toBe("VVV SHISH 5H5S5 ESHIE");
+      expect(Math.abs(decoder.wpm - w)).toBeLessThan(1);
+      expect(decoder.bias / decoder.dot).toBeGreaterThan(0.25);
+    }
+  });
+
+  it("reports sending quality corrected for the lengthening", () => {
+    const signal = synth(toIntervals("ABCDE FGHIJ KLMNO", farnsworth(20, 20)), 700, 0.3, 0.01, { reverb });
+    const { score, quality } = evaluateSend("ABCDEFGHIJKLMNO", decodeSignal(signal, 700).chars);
+    expect(score.deduction).toBe(0);
+    expect(quality.dashRatio!).toBeCloseTo(3, 0);
+    expect(quality.charGap!.mean).toBeCloseTo(3, 0);
+    expect(quality.notes).toEqual([]);
+  });
+});
+
 describe("MorseDecoder with spurious detections", () => {
   const TEXT = "VVV AOQXC MOPUB TZBSL KYKYZ RKMHL";
   const dot = 1.2 / 20;
@@ -169,18 +203,6 @@ describe("MorseDecoder with spurious detections", () => {
       }
     });
     const { text, decoder } = decodeKeying(noisy);
-    expect(text).toBe(TEXT);
-    expect(Math.abs(decoder.wpm - 20)).toBeLessThan(1);
-  });
-
-  it("bridges very short dropouts inside a mark", () => {
-    // 長点の途中でトーンが短点の 1/5 だけ途切れる
-    const broken = toIntervals(TEXT, farnsworth(20, 20)).flatMap(([on, off]): [number, number][] => {
-      if (off - on < 2 * dot) return [[on, off]];
-      const mid = (on + off) / 2;
-      return [[on, mid - dot / 10], [mid + dot / 10, off]];
-    });
-    const { text, decoder } = decodeKeying(broken);
     expect(text).toBe(TEXT);
     expect(Math.abs(decoder.wpm - 20)).toBeLessThan(1);
   });

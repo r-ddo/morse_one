@@ -299,7 +299,9 @@ class LabSession {
       ["文字間", of(gaps, "char"), "3"],
       ["語間", of(gaps, "word"), "7"],
     ];
-    const key = rows.map(([, xs]) => `${xs.length}:${avg(xs)}`).join("|");
+    const { dot, bias } = this.listener.decoder;
+    const stretch = (bias / dot).toFixed(2);
+    const key = rows.map(([, xs]) => `${xs.length}:${avg(xs)}`).join("|") + `|${stretch}`;
     if (this.view.stats.dataset.key === key) return;
     this.view.stats.dataset.key = key;
     this.view.stats.replaceChildren(
@@ -308,7 +310,9 @@ class LabSession {
         ...rows.map(([label, xs, std]) =>
           h("tr", {}, h("th", {}, label), h("td", {}, avg(xs)), h("td", {}, std), h("td", {}, String(xs.length)))),
       ),
-      h("p", { class: "note" }, `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）`),
+      h("p", { class: "note" },
+        `長さは推定短点長を 1 とし、残響などによる伸びを補正した値（直近 ${STATS_WINDOW} 個）。` +
+        `推定の伸び ${stretch}（符号はこれだけ長く、間は短く測れている）`),
     );
   }
 }

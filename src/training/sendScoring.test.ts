@@ -35,7 +35,7 @@ function sendText(text: string, style: SendStyle = {}, startAt = 0): SentChar[] 
 function sentCode(code: string, start: number, dash = 3, char: string | null = null, marks?: number[]): SentChar {
   const lengths = marks ?? [...code].map((x) => (x === "-" ? dash : 1) * DOT);
   const end = start + lengths.reduce((a, b) => a + b, 0) + (lengths.length - 1) * DOT;
-  return { char, code, start, end, marks: lengths, gaps: lengths.slice(1).map(() => DOT), dot: DOT };
+  return { char, code, start, end, marks: lengths, gaps: lengths.slice(1).map(() => DOT), dot: DOT, bias: 0 };
 }
 
 describe("evaluateSend", () => {

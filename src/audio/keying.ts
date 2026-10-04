@@ -44,7 +44,8 @@ export class KeyingDetector {
   private readonly hopLen: number;
   private readonly minChangeFrames: number;
   private readonly minRatio: number;
-  private readonly noiseAlpha: number;
+  private readonly noiseDown: number;
+  private readonly noiseUp: number;
   private readonly peakDecay: number;
   private readonly norm: number;
   /** 窓の 2 乗和 */
@@ -76,8 +77,9 @@ export class KeyingDetector {
     const hopSec = this.hopLen / sampleRate;
     this.minChangeFrames = Math.max(1, Math.round((opts.minChangeMs ?? 8) / 1000 / hopSec));
     this.minRatio = opts.minRatio ?? 5;
-    // 雑音は時定数 0.2 秒で平均する。ピークは 1 秒で半分に下がる
-    this.noiseAlpha = Math.min(1, hopSec / 0.2);
+    // 雑音は下がるときは時定数 0.02 秒、上がるときは 2 秒で追う。ピークは 1 秒で半分に下がる
+    this.noiseDown = Math.min(1, hopSec / 0.02);
+    this.noiseUp = Math.min(1, hopSec / 2);
     this.peakDecay = 0.5 ** hopSec;
     // 窓の左から x の割合までトーンがあるとき、振幅は x − sin(2πx)/(2π) 倍になる。
     // それが OFF_FRACTION になる x を求め、窓の中央とのずれを遅れとする
@@ -149,7 +151,10 @@ export class KeyingDetector {
     const span = this.peak - this.noise;
     const onLevel = this.noise + ON_FRACTION * span;
     const offLevel = this.noise + OFF_FRACTION * span;
-    if (!this.state && mag < onLevel) this.noise += this.noiseAlpha * (mag - this.noise);
+    if (!this.state && mag < onLevel) {
+      // 間に残る残響を雑音に数えないよう、下がるときは速く、上がるときはゆっくり追う
+      this.noise += (mag < this.noise ? this.noiseDown : this.noiseUp) * (mag - this.noise);
+    }
     const valid = this.peak >= this.noise * this.minRatio;
     // 下げの判定には純音らしさも求め、無音から雑音に変わったときなどの誤検出を防ぐ
     const raw = valid && (this.state ? mag > offLevel : mag > onLevel && purity >= MIN_PURITY);
