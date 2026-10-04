@@ -1,9 +1,9 @@
 import { MORSE } from "../audio/code";
 import { backupFileName, makeBackup, parseBackup } from "../storage/backup";
-import { loadAll, loadAttempts, replaceAll, type Attempt } from "../storage/db";
+import { loadAll, loadAttempts, loadSends, replaceAll, type Attempt, type SendRecord } from "../storage/db";
 import { DEFAULT_SETTINGS, saveSettings } from "../storage/settings";
 import { charsetChars } from "../training/charset";
-import { dailyStats, streakDays } from "../training/history";
+import { dailySends, dailyStats, streakDays } from "../training/history";
 import { weakness } from "../training/stats";
 import { chart } from "./chart";
 import type { ScreenContext } from "./context";
@@ -17,8 +17,13 @@ export async function showStats(ctx: ScreenContext): Promise<void> {
     console.error("failed to load attempts", e);
     return [];
   });
+  const sends = await loadSends().catch((e): SendRecord[] => {
+    console.error("failed to load sends", e);
+    return [];
+  });
   const now = Date.now();
   const days = dailyStats(attempts, DAYS, now);
+  const sendDays = dailySends(sends, DAYS, now);
   const practiced = attempts.filter((a) => a.mode !== "contrast");
   const today = days[days.length - 1];
 
@@ -53,6 +58,21 @@ export async function showStats(ctx: ScreenContext): Promise<void> {
       kind: "line",
       format: (v) => `${Math.round(v)} 字/分`,
     }));
+  }
+
+  if (sendDays.some((d) => d.points !== null)) {
+    charts.push(
+      chart(sendDays.map((d) => ({ label: d.label, value: d.points })), {
+        title: "送信練習の得点（点・平均）",
+        kind: "line",
+        format: (v) => `${Math.round(v)} 点`,
+      }),
+      chart(sendDays.map((d) => ({ label: d.label, value: d.cpm })), {
+        title: "送信の速度（字/分・平均）",
+        kind: "line",
+        format: (v) => `${Math.round(v)} 字/分`,
+      }),
+    );
   }
 
   const { limitMs, charset } = ctx.settings;

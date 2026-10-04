@@ -25,12 +25,30 @@ export class SendSession {
   /** 最後にキーを上げた時刻（秒） */
   private lastActivity = 0;
   private cached: SendResult | null = null;
+  /** お題の最初の文字を鳴らし始めた時刻（秒）。制限時間はここから数える */
+  private startedAt: number | null = null;
 
+  /** limitSec: 制限時間（秒）。指定すると模擬試験として、送れなかった字を未送信として採点する */
   constructor(
     readonly groups: readonly string[],
-    private readonly opts: { timed?: boolean } = {},
+    private readonly opts: { limitSec?: number } = {},
   ) {
     this.target = groups.join("");
+  }
+
+  get limitSec(): number | null {
+    return this.opts.limitSec ?? null;
+  }
+
+  /** お題を送り始めてからの時間（秒）。制限時間を超えない */
+  elapsed(now: number): number {
+    if (this.startedAt === null) return 0;
+    return Math.min(now - this.startedAt, this.opts.limitSec ?? Infinity);
+  }
+
+  /** 制限時間を過ぎたか */
+  timeUp(now: number): boolean {
+    return this.opts.limitSec !== undefined && this.startedAt !== null && now - this.startedAt >= this.opts.limitSec;
   }
 
   /** お題として受け付けた文字（訂正符号を含む） */
@@ -47,6 +65,9 @@ export class SendSession {
       if (this.phase === "warmup") {
         if (e.char === "V") this.warmupVs++;
       } else if (this.phase === "ready" || this.phase === "sending") {
+        this.startedAt ??= e.start;
+        // 制限時間を過ぎてから鳴らし始めた文字は数えない
+        if (this.opts.limitSec !== undefined && e.start > this.startedAt + this.opts.limitSec) continue;
         this.phase = "sending";
         this.sent.push(e);
         this.cached = null;
@@ -87,7 +108,10 @@ export class SendSession {
   }
 
   get result(): SendResult {
-    this.cached ??= evaluateSend(this.target, this.sent, { timed: this.opts.timed, live: this.phase !== "finished" });
+    this.cached ??= evaluateSend(this.target, this.sent, {
+      timed: this.opts.limitSec !== undefined,
+      live: this.phase !== "finished",
+    });
     return this.cached;
   }
 
@@ -98,7 +122,14 @@ export class SendSession {
     return 0;
   }
 
-  toRecord(fields: { mode: SendRecord["mode"]; charset: string; wpm: number; minutes?: number; ts?: number }): SendRecord {
+  toRecord(fields: {
+    mode: SendRecord["mode"];
+    charset: string;
+    wpm: number;
+    minutes?: number;
+    targetCpm?: number;
+    ts?: number;
+  }): SendRecord {
     const { score, quality } = this.result;
     return {
       ts: fields.ts ?? Date.now(),
@@ -124,6 +155,7 @@ export class SendSession {
       wordGap: quality.wordGap?.mean ?? null,
       wordGapCv: quality.wordGap?.cv ?? null,
       ...(fields.minutes !== undefined ? { minutes: fields.minutes } : {}),
+      ...(fields.targetCpm !== undefined ? { targetCpm: fields.targetCpm } : {}),
     };
   }
 

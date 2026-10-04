@@ -858,3 +858,16 @@ svg.chart {
   margin: 8px 0 0;
   padding-left: 1.2em;
 }
+
+.send-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.send-clock.ahead {
+  color: var(--ok);
+}
+
+.send-clock.behind {
+  color: var(--ng);
+}

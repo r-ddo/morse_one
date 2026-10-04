@@ -1,4 +1,4 @@
-import type { Attempt } from "../storage/db";
+import type { Attempt, SendRecord } from "../storage/db";
 
 /** 1 日分の集計 */
 export interface DayStat {
@@ -59,6 +59,31 @@ export function dailyStats(attempts: readonly Attempt[], days: number, now: numb
       rtMs: mean(rts),
       ewpm: mean(list.filter((a) => a.mode === "group" && a.ewpm !== undefined).map((a) => a.ewpm!)),
       cpm: mean(list.filter((a) => a.mode === "stream" && a.cpm !== undefined).map((a) => a.cpm!)),
+    };
+  });
+}
+
+/** 1 日分の送信練習の集計 */
+export interface SendDayStat {
+  label: string;
+  /** 平均の得点 */
+  points: number | null;
+  /** 平均の送信速度（字/分） */
+  cpm: number | null;
+}
+
+/** 今日を含む直近 days 日の送信練習を古い順に集計する */
+export function dailySends(sends: readonly SendRecord[], days: number, now: number): SendDayStat[] {
+  const today = startOfDay(now);
+  const buckets = new Map<string, SendRecord[]>();
+  for (let i = days - 1; i >= 0; i--) buckets.set(dayKey(today - i * DAY_MS + DAY_MS / 2), []);
+  for (const r of sends) buckets.get(dayKey(r.ts))?.push(r);
+  return [...buckets.entries()].map(([date, list]) => {
+    const [, m, d] = date.split("-").map(Number);
+    return {
+      label: `${m}/${d}`,
+      points: mean(list.map((r) => r.points)),
+      cpm: mean(list.filter((r) => r.cpm !== null).map((r) => r.cpm!)),
     };
   });
 }

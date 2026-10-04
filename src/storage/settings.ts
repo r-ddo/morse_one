@@ -34,6 +34,10 @@ export interface Settings {
   mockMinutes: number;
   /** 送信練習のお題の字数（5 字 1 組） */
   sendChars: number;
+  /** 送信の模擬試験の目標速度（字/分） */
+  sendMockCpm: number;
+  /** 送信の模擬試験の長さ（分） */
+  sendMockMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +59,8 @@ export const DEFAULT_SETTINGS: Settings = {
   mockMinutes: 3,
   // 試験（欧文暗語 80 字/分）の 1 分間分
   sendChars: 80,
+  sendMockCpm: 80,
+  sendMockMinutes: 5,
 };
 
 const KEY = "morse_one.settings";

@@ -64,6 +64,21 @@ describe("SendSession", () => {
     expect(session.position).toBe(5);
   });
 
+  it("stops counting at the time limit and scores the rest as unsent", () => {
+    const session = new SendSession(["ABCDE", "FGHIJ"], { limitSec: 2 });
+    session.skipWarmup();
+    const decoder = new MorseDecoder();
+    // 2 秒で送り終わらない（D は開始から 2.04 秒後に始まるので数えない）
+    play(session, decoder, at("ABCDE FGHIJ", 0.2), 3);
+    expect(session.timeUp(3)).toBe(true);
+    expect(session.elapsed(3)).toBe(2);
+    session.handle(decoder.tick(10), 10);
+    session.finish();
+    const { score } = session.result;
+    expect(session.chars.map((c) => c.char).join("")).toBe("ABC");
+    expect(score).toMatchObject({ unsent: 7, missing: 0, deduction: 4 });
+  });
+
   it("builds a record", () => {
     const session = new SendSession(["ABCDE"]);
     session.skipWarmup();

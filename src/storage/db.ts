@@ -167,6 +167,8 @@ export interface SendRecord {
   wordGapCv: number | null;
   /** 模擬試験の長さ（分） */
   minutes?: number;
+  /** 模擬試験の目標速度（字/分） */
+  targetCpm?: number;
 }
 
 export async function saveSend(record: SendRecord): Promise<void> {

@@ -3,14 +3,20 @@ import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { SendSession, sendGroups, type SendPhase } from "../training/sendDrill";
 import type { SendResult, Spread } from "../training/sendScoring";
+import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, select } from "./form";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
-/** 1 総通の欧文暗語は送受信とも 1 分間 80 字 */
+/** 1 総通の欧文暗語は送受信とも 1 分間 80 字・約 5 分間（400 字） */
 const EXAM_CPM = 80;
+const EXAM_MINUTES = 5;
+const EXAM_CHARS = 400;
+
+/** グループ送信か、時間を区切った模擬試験か */
+type SendMode = { kind: "group" } | { kind: "mock"; cpm: number; minutes: number };
 
 /** 前回固定した周波数（Hz）と速度（WPM）。次の練習の初期値にする */
 let lastFreq = 700;
@@ -29,6 +35,8 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     return [];
   });
   const s = ctx.settings;
+  const mockText = () => `お題 ${ctx.settings.sendMockCpm * ctx.settings.sendMockMinutes} 字`;
+  const mockLength = h("div", { class: "note" }, mockText());
   ctx.render(
     h("h1", {}, "送信練習"),
     h("p", { class: "note" },
@@ -46,7 +54,35 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
         (v) => ctx.updateSettings({ sendChars: Number(v) }),
       )),
     ),
-    h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx) }, "マイクを開始"),
+    h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, "マイクを開始"),
+    h("h2", {}, "模擬試験"),
+    h("p", { class: "note" },
+      `試験（欧文暗語 1 分間 ${EXAM_CPM} 字・約 ${EXAM_MINUTES} 分間）と同じく時間を区切って送ります。` +
+      "最初の文字から計時し、時間内に送れなかった字は未送信（2 字までごとに 1 点）になります"),
+    h("div", { class: "settings" },
+      field("目標速度", select(
+        [40, 50, 60, 70, 80, 90, 100].map((v) => [String(v), v === EXAM_CPM ? `${v} 字/分（試験）` : `${v} 字/分`]),
+        String(s.sendMockCpm),
+        (v) => {
+          ctx.updateSettings({ sendMockCpm: Number(v) });
+          mockLength.textContent = mockText();
+        },
+      )),
+      field("時間", select(
+        [1, 3, 5].map((v) => [String(v), v === EXAM_MINUTES ? `${v} 分（試験）` : `${v} 分`]),
+        String(s.sendMockMinutes),
+        (v) => {
+          ctx.updateSettings({ sendMockMinutes: Number(v) });
+          mockLength.textContent = mockText();
+        },
+      )),
+      mockLength,
+    ),
+    h("button", {
+      class: "primary",
+      type: "button",
+      onclick: () => void startSend(ctx, { kind: "mock", cpm: ctx.settings.sendMockCpm, minutes: ctx.settings.sendMockMinutes }),
+    }, "模擬試験をはじめる"),
     sends.length > 0 &&
       h("div", { class: "misses" },
         h("h2", {}, "最近の結果"),
@@ -54,6 +90,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
           ...sends.slice(0, 5).map((r) =>
             h("tr", {},
               h("th", {}, new Date(r.ts).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })),
+              h("td", {}, r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ"),
               h("td", {}, `${r.points} 点`),
               h("td", {}, r.cpm === null ? "―" : `${Math.round(r.cpm)} 字/分`),
               h("td", {}, `${r.target.length} 字`),
@@ -64,11 +101,15 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
   );
 }
 
-async function startSend(ctx: ScreenContext): Promise<void> {
+async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   // 再生用の AudioContext とマイク用が同時に動かないようにする
   ctx.player.release();
   const { charset, sendChars } = ctx.settings;
-  const session = new SendSession(sendGroups(Math.ceil(sendChars / 5), charsetChars(charset)));
+  const chars = mode.kind === "mock" ? mode.cpm * mode.minutes : sendChars;
+  const session = new SendSession(
+    sendGroups(Math.ceil(chars / 5), charsetChars(charset)),
+    mode.kind === "mock" ? { limitSec: mode.minutes * 60 } : {},
+  );
 
   const progress = h("div", { class: "progress" });
   const status = h("div", { class: "status" });
@@ -76,6 +117,7 @@ async function startSend(ctx: ScreenContext): Promise<void> {
   const speed = h("div", { class: "progress" });
   const grid = h("div", { class: "send-groups" });
   const pending = h("div", { class: "send-pending" });
+  const clock = h("div", { class: "send-clock", hidden: mode.kind !== "mock" });
   const skipBtn = h("button", { type: "button", onclick: () => session.skipWarmup() }, "VVV を省略する");
   const finishBtn = h("button", { type: "button", class: "primary", onclick: () => finish() }, "終了");
 
@@ -86,6 +128,7 @@ async function startSend(ctx: ScreenContext): Promise<void> {
         h("button", { type: "button", class: "small", onclick: () => ctx.stopDrill() }, "中断"),
       ),
       h("div", { class: "send-monitor" }, lamp, speed),
+      clock,
       status,
       grid,
       pending,
@@ -98,6 +141,8 @@ async function startSend(ctx: ScreenContext): Promise<void> {
   let releaseScreen: () => void = () => {};
   let lastPhase: SendPhase | null = null;
   let dirty = true;
+  /** 画面に表示している、今送っている組 */
+  let shownGroup = -1;
 
   const close = () => {
     cancelAnimationFrame(raf);
@@ -134,6 +179,11 @@ async function startSend(ctx: ScreenContext): Promise<void> {
     raf = requestAnimationFrame(draw);
     const l = listener;
     if (!l) return;
+    if (session.timeUp(l.now)) {
+      // 時間切れ。キーを上げたまま確定していない符号も文字にしてから終える
+      session.handle(l.decoder.tick(l.now + 60), l.now);
+      return finish();
+    }
     if (session.tick(l.now, l.detector.keyDown)) dirty = true;
     if (session.phase === "finished") return finish();
 
@@ -148,9 +198,12 @@ async function startSend(ctx: ScreenContext): Promise<void> {
     const locked = session.phase === "warmup" ? "" : "（固定）";
     speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
     pending.textContent = prettyCode(l.decoder.pendingCode);
+    if (mode.kind === "mock") renderClock(clock, session, mode, l.now);
     if (session.phase !== lastPhase) {
       lastPhase = session.phase;
-      status.textContent = STATUS[session.phase];
+      status.textContent = session.phase === "sending" && mode.kind === "mock"
+        ? "送信中… 時間になるか、送り終えて 3 秒たつと終了します"
+        : STATUS[session.phase];
       skipBtn.hidden = session.phase !== "warmup";
     }
     if (dirty) {
@@ -158,6 +211,12 @@ async function startSend(ctx: ScreenContext): Promise<void> {
       const pos = session.position;
       progress.textContent = `${Math.min(session.groups.length, Math.floor(pos / 5) + 1)} / ${session.groups.length} 組`;
       grid.replaceChildren(...groupBlocks(session.groups, session.chars.length > 0 ? session.result : null, pos));
+      // 今送っている組が見えるようにする
+      const group = Math.floor(pos / 5);
+      if (group !== shownGroup) {
+        shownGroup = group;
+        grid.children[Math.min(group, grid.children.length - 1)]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
     }
   };
   raf = requestAnimationFrame(draw);
@@ -171,10 +230,28 @@ async function startSend(ctx: ScreenContext): Promise<void> {
       void showSendMenu(ctx);
       return;
     }
-    const record = session.toRecord({ mode: "group", charset, wpm });
+    const record = session.toRecord(
+      mode.kind === "mock"
+        ? { mode: "mock", charset, wpm, minutes: mode.minutes, targetCpm: mode.cpm }
+        : { mode: "group", charset, wpm },
+    );
     void saveSend(record).catch((e) => console.error("failed to save send", e));
-    showSendResult(ctx, session, record);
+    showSendResult(ctx, session, record, mode);
   }
+}
+
+/** 模擬試験の経過時間と、目標の速度に対して何字進んでいるか（遅れているか） */
+function renderClock(el: HTMLElement, session: SendSession, mode: { cpm: number; minutes: number }, now: number): void {
+  const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+  if (session.phase !== "sending") {
+    el.textContent = `制限 ${mmss(mode.minutes * 60)}・目標 ${mode.cpm} 字/分。最初の文字から計時します`;
+    el.className = "send-clock";
+    return;
+  }
+  const elapsed = session.elapsed(now);
+  const ahead = Math.round(session.sentCount - (elapsed * mode.cpm) / 60);
+  el.textContent = `${mmss(elapsed)} / ${mmss(mode.minutes * 60)}・目標より ${ahead >= 0 ? `${ahead} 字早い` : `${-ahead} 字遅い`}`;
+  el.className = `send-clock ${ahead >= 0 ? "ahead" : "behind"}`;
 }
 
 /** お題と送信を組ごとに並べる。pos はお題のうち今送っている位置 */
@@ -189,16 +266,19 @@ function groupBlocks(groups: readonly string[], result: SendResult | null, pos: 
           const t = gi * 5 + i;
           const mark = score && t < pos ? score.marks[t] : null;
           const sent = score?.sentAt[t];
-          const text = mark === "missing" || mark === "unsent" ? "－" : sent && sent.length > 1 ? "?" : (sent ?? "");
-          const cls = mark === "ok" ? (score!.unclearAt[t] ? "unclear" : "ok") : mark ? "ng" : "";
-          return h("span", { class: cls, title: sent && sent.length > 1 ? prettyCode(sent) : "" }, mark ? text : "");
+          if (!mark || mark === "unsent") return h("span", {}, "");
+          const text = mark === "missing" ? "－" : sent && sent.length > 1 ? "?" : (sent ?? "");
+          const cls = mark === "ok" ? (score!.unclearAt[t] ? "unclear" : "ok") : "ng";
+          return h("span", { class: cls, title: sent && sent.length > 1 ? prettyCode(sent) : "" }, text);
         })),
     ));
 }
 
-function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRecord): void {
+function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRecord, mode: SendMode): void {
   const { score, quality } = session.result;
+  const chars = session.target.length;
   const breakdown: [string, number, string][] = [
+    ["未送信", score.unsent, "2 字までごとに 1 点"],
     ["誤字", score.wrong, "3 点ずつ"],
     ["脱字", score.missing, "3 点ずつ"],
     ["冗字", score.extra, "3 点ずつ"],
@@ -218,9 +298,12 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
   ];
 
   ctx.render(
-    h("h1", {}, "結果"),
+    h("h1", {}, mode.kind === "mock" ? `模擬試験の結果（${mode.minutes} 分・目標 ${mode.cpm} 字/分）` : "結果"),
     h("div", { class: "summary" },
       h("div", {}, `得点 ${score.points} 点（減点 ${score.deduction}）`),
+      mode.kind === "mock" && chars !== EXAM_CHARS
+        ? h("div", {}, `試験の ${EXAM_CHARS} 字に換算すると ${examPoints(score.deduction, chars, EXAM_CHARS)} 点`)
+        : null,
       h("div", {}, record.cpm === null ? "速度 ―" : `速度 ${Math.round(record.cpm)} 字/分（符号 ${record.wpm.toFixed(1)} WPM）`),
     ),
     h("table", { class: "lab-table" },
@@ -228,7 +311,8 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
         h("tr", {}, h("th", {}, label), h("td", {}, `${n}`), h("td", {}, rule))),
     ),
     h("div", { class: "send-groups" }, ...groupBlocks(session.groups, session.result, session.target.length)),
-    h("p", { class: "note" }, "下段が復号した文字。赤は誤り、黄は符号不明りょう、－は脱字"),
+    h("p", { class: "note" },
+      "下段が復号した文字。赤は誤り、黄は符号不明りょう、－は脱字" + (score.unsent > 0 ? "、空欄は未送信" : "")),
     h("div", { class: "chart-card" },
       h("h2", {}, "符号の質"),
       h("table", { class: "lab-table" },
@@ -242,7 +326,7 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
         : h("p", {}, "目立った癖はありません"),
     ),
     h("div", { class: "row" },
-      h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx) }, "もう一度"),
+      h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, mode) }, "もう一度"),
       h("button", { type: "button", onclick: () => void showSendMenu(ctx) }, "送信練習メニュー"),
     ),
     h("button", { type: "button", onclick: () => ctx.showHome() }, "ホーム"),
