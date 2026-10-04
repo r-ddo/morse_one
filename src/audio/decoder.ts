@@ -109,11 +109,13 @@ export class MorseDecoder {
     return out;
   }
 
-  keyUp(t: number): DecodeEvent[] {
+  /** accept が false なら、その符号は外の音として捨てる（キーを上げたままだったことにする） */
+  keyUp(t: number, accept = true): DecodeEvent[] {
     if (this.downAt === null) return [];
     const start = this.downAt;
     const duration = t - start;
     this.downAt = null;
+    if (!accept) return [];
     if (duration < MIN_PART * this.dot && this.recentMarks.length >= MIN_PART_AFTER) {
       // ごく短い符号は雑音として捨てる（キーを上げたままだったことにする）
       return [];

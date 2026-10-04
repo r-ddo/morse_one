@@ -35,6 +35,11 @@ export class KeyListener {
   rmsDb = -Infinity;
   private readonly spectrum: Float32Array<ArrayBuffer>;
   private freqCandidates: number[] = [];
+  /** 自動検出で一度でも周波数を合わせたか */
+  private freqLocked = false;
+  /** 直近の符号のピークの周波数と、続けて捨てた符号の数 */
+  private markPeaks: number[] = [];
+  private rejectedRun = 0;
   /** 最初のチャンクを受け取った時刻（performance.now()）と、それ以降に受け取ったサンプル数 */
   private firstChunkAt: number | null = null;
   private received = 0;
@@ -86,6 +91,7 @@ export class KeyListener {
   setFreq(freq: number): void {
     this.detector.setFreq(freq);
     this.freqCandidates = [];
+    this.freqLocked = true;
   }
 
   /** 復号をやり直す。速度の推定は引き継ぐ */
@@ -106,14 +112,45 @@ export class KeyListener {
     this.rmsDb = 10 * Math.log10(sum / samples.length + 1e-12);
 
     this.mic.analyser.getFloatFrequencyData(this.spectrum);
-    if (this.autoFreq) this.trackFreq();
+    // 最初はスペクトルのピークで周波数を合わせる。合わせたあとは符号ごとのピークで合わせ直す
+    // （手を止めている間に周りの音のピークへずれると、次の最初の符号を拾えなくなるため）
+    if (this.autoFreq && !this.freqLocked) this.trackFreq();
 
     const { events, frames } = this.detector.process(samples);
     const out: DecodeEvent[] = [];
-    for (const e of events) out.push(...(e.down ? this.decoder.keyDown(e.t) : this.decoder.keyUp(e.t)));
+    for (const e of events) {
+      if (e.down) {
+        out.push(...this.decoder.keyDown(e.t));
+        continue;
+      }
+      if (this.autoFreq) this.retune(e.tonal !== false, e.peakFreq);
+      out.push(...this.decoder.keyUp(e.t, e.tonal !== false));
+    }
     out.push(...this.decoder.tick(this.detector.time));
     if (frames.length > 0) this.handlers.onFrames?.(frames);
     if (out.length > 0) this.handlers.onEvents?.(out, this.detector.time);
+  }
+
+  /**
+   * 直近 3 つの符号のピークがそろっていて、検出の周波数とずれていれば合わせ直す。
+   * 符号を続けて捨てるようなら、周波数が大きくずれたとみなしてスペクトルから合わせ直す
+   */
+  private retune(tonal: boolean, peakFreq: number | undefined): void {
+    this.rejectedRun = tonal ? 0 : this.rejectedRun + 1;
+    if (this.rejectedRun >= 5) {
+      this.freqLocked = false;
+      this.freqCandidates = [];
+      this.rejectedRun = 0;
+    }
+    if (peakFreq === undefined) return;
+    this.markPeaks.push(peakFreq);
+    if (this.markPeaks.length > 3) this.markPeaks.shift();
+    if (this.markPeaks.length < 3 || Math.max(...this.markPeaks) - Math.min(...this.markPeaks) > 10) return;
+    const median = [...this.markPeaks].sort((a, b) => a - b)[1];
+    if (Math.abs(median - this.detector.freq) > 4) {
+      this.detector.setFreq(median);
+      this.handlers.onFreq?.(median);
+    }
   }
 
   /** スペクトルのはっきりしたピークを集め、その中央値に検出の周波数を合わせる */
@@ -125,6 +162,7 @@ export class KeyListener {
     if (this.freqCandidates.length < 8) return;
     const sorted = [...this.freqCandidates].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
+    this.freqLocked = true;
     if (Math.abs(median - this.detector.freq) > 10) {
       this.detector.setFreq(median);
       this.handlers.onFreq?.(median);
