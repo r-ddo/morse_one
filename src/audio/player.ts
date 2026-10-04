@@ -22,7 +22,7 @@ const RAMP = 0.005;
 /** 再生予約の先行時間（秒） */
 const LEAD = 0.05;
 
-interface AudioSessionNavigator {
+export interface AudioSessionNavigator {
   audioSession?: { type: string };
 }
 

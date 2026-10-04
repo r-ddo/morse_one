@@ -2,6 +2,10 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  build: {
+    // AudioWorklet を data: URL で読み込めない環境があるので、ファイルとして出力する
+    assetsInlineLimit: (file) => (file.endsWith("-worklet.js") ? false : undefined),
+  },
   plugins: [
     VitePWA({
       // 練習中に勝手に再読み込みしないよう、更新は利用者が選ぶ

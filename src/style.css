@@ -683,3 +683,98 @@ svg.chart {
 .banner span {
   flex: 1;
 }
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.check input {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.lab-info,
+.lab-stats {
+  font-size: 0.85rem;
+}
+
+.lab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.lab-table th,
+.lab-table td {
+  text-align: left;
+  padding: 2px 6px 2px 0;
+  vertical-align: top;
+}
+
+.lab-table td {
+  overflow-wrap: anywhere;
+}
+
+.lab-table th {
+  color: var(--muted);
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.lab-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lab-tiles {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.lab-tiles .tile-value {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lamp {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg);
+}
+
+.lamp.on {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.lab-canvas {
+  display: block;
+  width: 100%;
+  height: 110px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lab-canvas.spectrum {
+  height: 80px;
+}
+
+.lab-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.3rem;
+  min-height: 3.2em;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.lab-pending {
+  color: var(--muted);
+}

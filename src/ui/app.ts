@@ -13,6 +13,7 @@ import { h, prettyCode } from "./dom";
 import { field, range, sec, select, wpm } from "./form";
 import type { ActiveDrill, ScreenContext } from "./context";
 import { createKeyboard } from "./keyboard";
+import { showLab } from "./labScreen";
 import { showMockMenu } from "./mockScreen";
 import { showStats } from "./statsScreen";
 import { showStreamMenu } from "./streamScreen";
@@ -92,6 +93,7 @@ export class App {
         h("button", { type: "button", onclick: () => this.showContrastMenu() }, "聞き分け練習"),
         h("button", { type: "button", onclick: () => void showStats(this.ctx) }, "成績"),
       ),
+      h("button", { type: "button", onclick: () => showLab(this.ctx) }, "送信実験（マイク入力）"),
     );
   }
 

@@ -1,0 +1,419 @@
+import { MorseDecoder, type DecodeEvent, type GapKind } from "../audio/decoder";
+import { KeyingDetector, findTonePeak, type DetectorFrame } from "../audio/keying";
+import { MicCapture, type MicProcessing } from "../audio/mic";
+import type { ScreenContext } from "./context";
+import { h, prettyCode } from "./dom";
+import { range } from "./form";
+import { showBanner } from "./updateBanner";
+import { keepScreenOn } from "./wakeLock";
+
+/** 画面を開き直しても保つ実験の設定 */
+const options = {
+  processing: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } as MicProcessing,
+  autoFreq: true,
+  freq: 700,
+};
+
+const PROCESSING_LABELS: [keyof MicProcessing, string][] = [
+  ["echoCancellation", "エコーキャンセル"],
+  ["noiseSuppression", "ノイズ抑制"],
+  ["autoGainControl", "自動ゲイン（AGC）"],
+];
+
+/** 波形表示の長さ（秒） */
+const HISTORY_SEC = 4;
+/** 自動検出で探す周波数の範囲（Hz） */
+const FREQ_MIN = 300;
+const FREQ_MAX = 1500;
+/** 統計に使う直近の符号・間の数 */
+const STATS_WINDOW = 60;
+
+interface LabView {
+  lamp: HTMLElement;
+  wpm: HTMLElement;
+  freq: HTMLElement;
+  level: HTMLElement;
+  envelope: HTMLCanvasElement;
+  spectrum: HTMLCanvasElement;
+  text: HTMLElement;
+  pending: HTMLElement;
+  stats: HTMLElement;
+  freqInput: HTMLInputElement;
+  freqValue: HTMLElement;
+}
+
+/** 送信実験: 練習機などのサイドトーンをマイクから入力し、トーンのオン/オフと符号を検出する */
+export function showLab(ctx: ScreenContext): void {
+  // 再生用の AudioContext とマイク用が同時に動かないようにする
+  ctx.player.release();
+  let session: LabSession | null = null;
+  let starting = false;
+
+  const startBtn = h("button", { type: "button", class: "primary", onclick: () => void toggle() }, "マイクを開始");
+  const info = h("div", { class: "lab-info" }, "開始すると、実際に適用された設定をここに表示します");
+
+  const checks = PROCESSING_LABELS.map(([key, label]) => {
+    const input = h("input", { type: "checkbox", checked: options.processing[key] });
+    input.addEventListener("change", () => {
+      options.processing = { ...options.processing, [key]: input.checked };
+      if (session) void restart();
+    });
+    return h("label", { class: "check" }, input, h("span", {}, label));
+  });
+
+  const freqRange = range(FREQ_MIN, FREQ_MAX, 10, options.freq, (v) => `${v} Hz`, (v) => {
+    options.freq = v;
+    options.autoFreq = false;
+    autoInput.checked = false;
+    session?.setFreq(v);
+  });
+  const autoInput = h("input", { type: "checkbox", checked: options.autoFreq });
+  autoInput.addEventListener("change", () => (options.autoFreq = autoInput.checked));
+
+  const view: LabView = {
+    lamp: h("div", { class: "lamp" }),
+    wpm: h("div", { class: "tile-value" }, "―"),
+    freq: h("div", { class: "tile-value" }, "―"),
+    level: h("div", { class: "tile-value" }, "―"),
+    envelope: h("canvas", { class: "lab-canvas" }),
+    spectrum: h("canvas", { class: "lab-canvas spectrum" }),
+    text: h("span", {}),
+    pending: h("span", { class: "lab-pending" }),
+    stats: h("div", { class: "lab-stats" }),
+    freqInput: freqRange.querySelector("input")!,
+    freqValue: freqRange.querySelector(".range-value")!,
+  };
+  const tile = (label: string, value: HTMLElement) => h("div", {}, h("div", { class: "tile-label" }, label), value);
+
+  ctx.render(
+    h("h1", {}, "送信実験（マイク入力）"),
+    h("p", { class: "note" },
+      "練習機のサイドトーンをマイクから入力して、トーンのオン/オフと符号を検出します。" +
+      "内蔵マイクでスピーカーの音を拾っても、有線でつないでもかまいません"),
+    startBtn,
+    h("div", { class: "settings" },
+      h("h2", {}, "ブラウザの音声処理（オフ推奨）"),
+      ...checks,
+      info,
+    ),
+    h("div", { class: "chart-card lab-monitor" },
+      h("div", { class: "lab-tiles" }, view.lamp, tile("推定速度", view.wpm), tile("周波数", view.freq), tile("入力レベル", view.level)),
+      view.envelope,
+      h("p", { class: "note" }, `目的の周波数の強さ（直近 ${HISTORY_SEC} 秒）。塗りがキーを下げていると判定した区間、点線が閾値`),
+      view.spectrum,
+      h("p", { class: "note" }, "スペクトル（0〜2000 Hz）。縦線が検出に使っている周波数"),
+      h("div", { class: "field" },
+        h("label", { class: "check" }, autoInput, h("span", {}, "周波数を自動検出")),
+        freqRange,
+      ),
+    ),
+    h("div", { class: "chart-card" },
+      h("div", { class: "chart-head" },
+        h("h2", {}, "復元した文字"),
+        h("button", { type: "button", class: "small", onclick: () => session?.clear() }, "クリア"),
+      ),
+      h("div", { class: "lab-text" }, view.text, view.pending),
+      view.stats,
+    ),
+    h("button", { type: "button", onclick: () => ctx.stopDrill() }, "ホーム"),
+  );
+
+  ctx.setActive({ key: () => false, abort: () => stop() });
+
+  async function start(): Promise<void> {
+    if (starting) return;
+    starting = true;
+    startBtn.disabled = true;
+    try {
+      session = await LabSession.start(view, () => {
+        stop();
+        showBanner("マイクが止められました");
+      });
+      info.replaceChildren(session.describe());
+      startBtn.textContent = "停止";
+    } catch (e) {
+      console.error("failed to start microphone", e);
+      showBanner(`マイクを開始できませんでした（${e instanceof Error ? e.name : String(e)}）`);
+    } finally {
+      starting = false;
+      startBtn.disabled = false;
+    }
+  }
+
+  function stop(): void {
+    session?.close();
+    session = null;
+    startBtn.textContent = "マイクを開始";
+  }
+
+  async function restart(): Promise<void> {
+    stop();
+    await start();
+  }
+
+  async function toggle(): Promise<void> {
+    if (session) stop();
+    else await start();
+  }
+}
+
+class LabSession {
+  private readonly detector: KeyingDetector;
+  private decoder = new MorseDecoder();
+  private frames: DetectorFrame[] = [];
+  private readonly spectrum: Float32Array<ArrayBuffer>;
+  private freqCandidates: number[] = [];
+  private text = "";
+  private marks: { kind: "." | "-"; units: number }[] = [];
+  private gaps: { kind: GapKind; units: number }[] = [];
+  private rmsDb = -Infinity;
+  private peakDb = -Infinity;
+  private peakAt = 0;
+  private raf = 0;
+  private releaseScreen: () => void = () => {};
+
+  private constructor(
+    private readonly mic: MicCapture,
+    private readonly view: LabView,
+  ) {
+    this.detector = new KeyingDetector(mic.ctx.sampleRate, options.freq);
+    this.spectrum = new Float32Array(mic.analyser.frequencyBinCount);
+    void keepScreenOn().then((release) => (this.releaseScreen = release));
+    this.raf = requestAnimationFrame(this.draw);
+  }
+
+  static async start(view: LabView, onEnded: () => void): Promise<LabSession> {
+    let session: LabSession | null = null;
+    const mic = await MicCapture.open(options.processing, (s) => session?.onSamples(s));
+    session = new LabSession(mic, view);
+    mic.track.addEventListener("ended", onEnded);
+    return session;
+  }
+
+  close(): void {
+    cancelAnimationFrame(this.raf);
+    this.releaseScreen();
+    this.mic.close();
+    this.view.lamp.classList.remove("on");
+  }
+
+  setFreq(freq: number): void {
+    this.detector.setFreq(freq);
+    this.freqCandidates = [];
+  }
+
+  clear(): void {
+    this.decoder = new MorseDecoder(this.decoder.wpm);
+    this.text = "";
+    this.marks = [];
+    this.gaps = [];
+  }
+
+  /** 要求した音声処理と、実際に適用された設定 */
+  describe(): HTMLElement {
+    const track = this.mic.track;
+    const settings = track.getSettings() as Partial<Record<keyof MicProcessing, boolean>> & MediaTrackSettings;
+    const supported = navigator.mediaDevices.getSupportedConstraints() as Partial<Record<keyof MicProcessing, boolean>>;
+    const onOff = (v: boolean) => (v ? "オン" : "オフ");
+    const rows: [string, string][] = PROCESSING_LABELS.map(([key, label]) => {
+      const actual = settings[key];
+      const shown = actual === undefined ? (supported[key] ? "不明" : "指定できない") : onOff(actual);
+      return [label, `要求 ${onOff(options.processing[key])} → 実際 ${shown}`];
+    });
+    const ctx = this.mic.ctx;
+    rows.push(["入力", track.label || "（名前なし）"]);
+    rows.push(["サンプリング周波数", `${ctx.sampleRate} Hz`]);
+    if (ctx.baseLatency !== undefined) rows.push(["出力の基本遅延", `${(ctx.baseLatency * 1000).toFixed(1)} ms`]);
+    return h("table", { class: "lab-table" },
+      ...rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v))));
+  }
+
+  private onSamples(samples: Float32Array): void {
+    let sum = 0;
+    let peak = 0;
+    for (const x of samples) {
+      sum += x * x;
+      peak = Math.max(peak, Math.abs(x));
+    }
+    const now = this.detector.time;
+    this.rmsDb = 10 * Math.log10(sum / samples.length + 1e-12);
+    const peakDb = 20 * Math.log10(peak + 1e-12);
+    if (peakDb >= this.peakDb || now - this.peakAt > 1) {
+      this.peakDb = peakDb;
+      this.peakAt = now;
+    }
+
+    const { events, frames } = this.detector.process(samples);
+    for (const e of events) this.apply(e.down ? this.decoder.keyDown(e.t) : this.decoder.keyUp(e.t));
+    this.apply(this.decoder.tick(this.detector.time));
+    this.frames.push(...frames);
+    if (this.frames.length > 0 && this.frames[0].t < now - 2 * HISTORY_SEC) {
+      this.frames = this.frames.filter((f) => f.t >= now - HISTORY_SEC);
+    }
+  }
+
+  private apply(events: DecodeEvent[]): void {
+    for (const e of events) {
+      switch (e.type) {
+        case "mark":
+          this.marks.push({ kind: e.kind, units: e.units });
+          break;
+        case "gap":
+          this.gaps.push({ kind: e.kind, units: e.units });
+          break;
+        case "char":
+          this.text += e.char ?? `(${prettyCode(e.code)})`;
+          break;
+        case "word":
+          this.text += " ";
+          break;
+      }
+    }
+    if (this.marks.length > STATS_WINDOW * 2) this.marks = this.marks.slice(-STATS_WINDOW);
+    if (this.gaps.length > STATS_WINDOW * 2) this.gaps = this.gaps.slice(-STATS_WINDOW);
+    if (this.text.length > 400) this.text = this.text.slice(-300);
+  }
+
+  private readonly draw = (): void => {
+    this.raf = requestAnimationFrame(this.draw);
+    const { view, detector } = this;
+    const binHz = this.mic.ctx.sampleRate / this.mic.analyser.fftSize;
+    this.mic.analyser.getFloatFrequencyData(this.spectrum);
+    if (options.autoFreq) this.trackFreq(binHz);
+
+    view.lamp.classList.toggle("on", detector.keyDown);
+    setText(view.wpm, this.marks.length > 0 ? `${this.decoder.wpm.toFixed(1)} WPM` : "―");
+    setText(view.freq, `${Math.round(detector.freq)} Hz`);
+    setText(view.level, Number.isFinite(this.rmsDb) ? `${Math.round(this.rmsDb)} dBFS` : "―");
+    view.level.title = `ピーク ${Math.round(this.peakDb)} dBFS`;
+    if (document.activeElement !== view.freqInput) {
+      view.freqInput.value = String(Math.round(detector.freq));
+      setText(view.freqValue, `${Math.round(detector.freq)} Hz`);
+    }
+    setText(view.text, this.text);
+    setText(view.pending, prettyCode(this.decoder.pendingCode));
+    this.renderStats();
+
+    drawEnvelope(view.envelope, this.frames, detector.time);
+    drawSpectrum(view.spectrum, this.spectrum, binHz, detector.freq);
+  };
+
+  /** スペクトルのはっきりしたピークを集め、その中央値に検出の周波数を合わせる */
+  private trackFreq(binHz: number): void {
+    const peak = findTonePeak(this.spectrum, binHz, FREQ_MIN, FREQ_MAX);
+    if (!peak || peak.snrDb < 20) return;
+    this.freqCandidates.push(peak.freq);
+    if (this.freqCandidates.length > 15) this.freqCandidates.shift();
+    if (this.freqCandidates.length < 8) return;
+    const sorted = [...this.freqCandidates].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (Math.abs(median - this.detector.freq) > 10) {
+      this.detector.setFreq(median);
+      options.freq = Math.round(median);
+    }
+  }
+
+  private renderStats(): void {
+    const marks = this.marks.slice(-STATS_WINDOW);
+    const gaps = this.gaps.slice(-STATS_WINDOW);
+    const avg = (xs: number[]) => (xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(2) : "―");
+    const of = <T extends { kind: string; units: number }>(xs: T[], kind: string) =>
+      xs.filter((x) => x.kind === kind).map((x) => x.units);
+    const rows: [string, number[], string][] = [
+      ["短点", of(marks, "."), "1"],
+      ["長点", of(marks, "-"), "3"],
+      ["符号内の間", of(gaps, "element"), "1"],
+      ["文字間", of(gaps, "char"), "3"],
+      ["語間", of(gaps, "word"), "7"],
+    ];
+    const key = rows.map(([, xs]) => `${xs.length}:${avg(xs)}`).join("|");
+    if (this.view.stats.dataset.key === key) return;
+    this.view.stats.dataset.key = key;
+    this.view.stats.replaceChildren(
+      h("table", { class: "lab-table" },
+        h("tr", {}, h("th", {}, ""), h("th", {}, "平均"), h("th", {}, "標準"), h("th", {}, "数")),
+        ...rows.map(([label, xs, std]) =>
+          h("tr", {}, h("th", {}, label), h("td", {}, avg(xs)), h("td", {}, std), h("td", {}, String(xs.length)))),
+      ),
+      h("p", { class: "note" }, `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）`),
+    );
+  }
+}
+
+function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+/** キャンバスを表示サイズに合わせ、描画用のコンテキストと色を返す */
+function prepare(canvas: HTMLCanvasElement): { g: CanvasRenderingContext2D; w: number; h: number; color: (name: string) => string } | null {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(canvas.clientWidth * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (w === 0 || h === 0) return null;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  g.clearRect(0, 0, w, h);
+  const style = getComputedStyle(canvas);
+  return { g, w, h, color: (name) => style.getPropertyValue(name).trim() };
+}
+
+function drawEnvelope(canvas: HTMLCanvasElement, frames: DetectorFrame[], now: number): void {
+  const p = prepare(canvas);
+  if (!p) return;
+  const { g, w, h, color } = p;
+  const from = now - HISTORY_SEC;
+  const x = (t: number) => ((t - from) / HISTORY_SEC) * w;
+  // -90〜0 dBFS
+  const y = (mag: number) => h * Math.min(1, Math.max(0, -(20 * Math.log10(Math.max(mag, 1e-6))) / 90));
+  const visible = frames.filter((f) => f.t >= from);
+
+  g.fillStyle = color("--accent");
+  g.globalAlpha = 0.25;
+  let runStart: number | null = null;
+  for (const f of visible) {
+    if (f.on && runStart === null) runStart = f.t;
+    if (!f.on && runStart !== null) {
+      g.fillRect(x(runStart), 0, x(f.t) - x(runStart), h);
+      runStart = null;
+    }
+  }
+  if (runStart !== null) g.fillRect(x(runStart), 0, w - x(runStart), h);
+  g.globalAlpha = 1;
+
+  const line = (value: (f: DetectorFrame) => number, stroke: string, dash: number[]) => {
+    g.beginPath();
+    visible.forEach((f, i) => (i === 0 ? g.moveTo(x(f.t), y(value(f))) : g.lineTo(x(f.t), y(value(f)))));
+    g.strokeStyle = stroke;
+    g.setLineDash(dash);
+    g.lineWidth = window.devicePixelRatio || 1;
+    g.stroke();
+  };
+  line((f) => f.onLevel, color("--muted"), [4, 4]);
+  line((f) => f.mag, color("--fg"), []);
+  g.setLineDash([]);
+}
+
+function drawSpectrum(canvas: HTMLCanvasElement, db: Float32Array, binHz: number, freq: number): void {
+  const p = prepare(canvas);
+  if (!p) return;
+  const { g, w, h, color } = p;
+  const maxHz = 2000;
+  const bins = Math.min(db.length, Math.floor(maxHz / binHz));
+  // -120〜-20 dB
+  const y = (v: number) => h * Math.min(1, Math.max(0, (-20 - v) / 100));
+  g.beginPath();
+  for (let i = 0; i < bins; i++) {
+    const px = (i * binHz * w) / maxHz;
+    if (i === 0) g.moveTo(px, y(db[i]));
+    else g.lineTo(px, y(db[i]));
+  }
+  g.strokeStyle = color("--fg");
+  g.lineWidth = window.devicePixelRatio || 1;
+  g.stroke();
+  g.fillStyle = color("--accent");
+  g.fillRect((freq / maxHz) * w - 1, 0, 2 * (window.devicePixelRatio || 1), h);
+}
