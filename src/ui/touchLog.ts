@@ -1,4 +1,5 @@
 import { h } from "./dom";
+import { showBanner } from "./updateBanner";
 
 /** 記録するイベント。iOS 独自の gesture* は 2 本指の操作（拡大など）の始まりと終わり */
 const LOGGED_EVENTS = [
@@ -46,7 +47,10 @@ export function touchLog({ live, max = live ? 60 : 300 }: { live: boolean; max?:
     const all = [...pad.parentElement!.children];
     return all.length === 1 ? "パッド" : all.indexOf(pad) === 0 ? "左" : "右";
   };
+  /** 記録の欄そのもの（コピーのボタンや、選択しようとして触れたところ）のタッチは記録しない */
+  const inCard = (target: EventTarget | null) => target instanceof Node && card.contains(target);
   const onEvent = (e: Event) => {
+    if (e instanceof TouchEvent ? [...e.changedTouches].every((t) => inCard(t.target)) : inCard(e.target)) return;
     const lag = performance.now() - e.timeStamp;
     const late = lag >= LATE_MS && lag < 60_000 ? `（${Math.round(lag)} ms 遅れ）` : "";
     if (e instanceof TouchEvent) {
@@ -65,17 +69,31 @@ export function touchLog({ live, max = live ? 60 : 300 }: { live: boolean; max?:
     t0 = null;
     pre.textContent = "";
   };
-  return {
-    el: h("div", { class: "chart-card" },
-      h("div", { class: "chart-head" },
-        h("h2", {}, "タッチの記録（新しい順）"),
+  const copyBtn = h("button", { type: "button", class: "small" }, "コピー");
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(lines.join("\n")).then(
+      () => {
+        copyBtn.textContent = "コピーしました";
+        setTimeout(() => (copyBtn.textContent = "コピー"), 1500);
+      },
+      (e) => showBanner(`コピーできませんでした（${e instanceof Error ? e.name : String(e)}）`),
+    );
+  });
+  const card = h("div", { class: "chart-card" },
+    h("div", { class: "chart-head" },
+      h("h2", {}, "タッチの記録（新しい順）"),
+      h("div", { class: "row" },
+        copyBtn,
         live && h("button", { type: "button", class: "small", onclick: clear }, "消す"),
       ),
-      h("p", { class: "note" },
-        "左端は最初のイベントからのミリ秒。★☆ はアプリがパドル（電鍵）を押した・離したとき。" +
-        "反応しなかったときにここをスクリーンショットで送ってください"),
-      pre,
     ),
+    h("p", { class: "note" },
+      "左端は最初のイベントからのミリ秒。★☆ はアプリがパドル（電鍵）を押した・離したとき。" +
+      "反応しなかったときに「コピー」で記録全体をコピーして送ってください"),
+    pre,
+  );
+  return {
+    el: card,
     add,
     detach(): void {
       cancelAnimationFrame(raf);
