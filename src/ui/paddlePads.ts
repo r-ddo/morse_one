@@ -90,6 +90,9 @@ interface PadSpec {
   release(): void;
 }
 
+const GESTURE_EVENTS = ["gesturestart", "gesturechange", "gestureend"] as const;
+const preventGesture = (e: Event) => e.preventDefault();
+
 /** タッチとキーボードで押すパッドを並べる。同じパッドを複数の指・キーで押しても、押す・離すは 1 回ずつ */
 function touchPads(specs: PadSpec[]): TouchPads {
   const keys = new Map<string, number>();
@@ -140,6 +143,9 @@ function touchPads(specs: PadSpec[]): TouchPads {
   };
   document.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", releaseAll);
+  // iOS Safari は、指を置いたまま別の指で触れると 2 本指の操作（ピンチでの拡大など）の始まりとみなし、
+  // 2 本目のタッチを数百ミリ秒止めてから渡す（実機の記録で確認）。その操作（iOS 独自の gesture*）を止める
+  for (const type of GESTURE_EVENTS) document.addEventListener(type, preventGesture, { passive: false });
 
   const el = h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads);
 
@@ -192,6 +198,7 @@ function touchPads(specs: PadSpec[]): TouchPads {
     detach(): void {
       document.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", releaseAll);
+      for (const type of GESTURE_EVENTS) document.removeEventListener(type, preventGesture);
     },
   };
 }
