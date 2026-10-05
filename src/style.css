@@ -150,6 +150,9 @@ button.small {
 .drill.keyed {
   height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
   min-height: 0;
+  /* 文字の選択を禁止すると、iOS が 2 本目の指のタッチを数百ミリ秒止めることがあった（送信実験の画面では起きない）。疑わしいので外す */
+  user-select: auto;
+  -webkit-user-select: auto;
 }
 
 .drill.keyed .send-groups {
