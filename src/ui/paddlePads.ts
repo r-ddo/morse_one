@@ -119,7 +119,9 @@ function touchPads(specs: PadSpec[]): TouchPads {
     const pad = h("div", { class: "paddle-pad" },
       h("span", { class: "paddle-code" }, spec.label),
       h("span", { class: "paddle-key" }, spec.hint));
+    // タッチは下のタッチイベントで受け取る。ポインターイベントはマウスとペンだけ
     pad.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "touch") return;
       e.preventDefault();
       // 指を少し動かしても離したことにならないよう、ポインターを捕まえておく
       pad.setPointerCapture(e.pointerId);
@@ -140,9 +142,42 @@ function touchPads(specs: PadSpec[]): TouchPads {
   window.addEventListener("blur", releaseAll);
 
   const el = h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads);
-  // iOS Safari は touch-action だけでは素早い 2 回のタップを拡大と見なすことがあるので、タッチの既定の動作を止める。
-  // パッドの間のすき間も含める（ポインターイベントは止まらない）
-  el.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+
+  // タッチ。iOS Safari ではポインターイベントだと、指を素早く交互に使ったときや連打したときに押したことを取りこぼすので、
+  // タッチイベントで指ごとに受け取る。指は触れたパッドのものとし、離すまで動かしても変えない
+  /** 触れている指（Touch.identifier）と、そのパッド */
+  const touches = new Map<number, number>();
+  const touchId = (id: number) => `touch${id}`;
+  const endTouch = (id: number) => {
+    const i = touches.get(id);
+    if (i === undefined) return;
+    touches.delete(id);
+    release(i, touchId(id));
+  };
+  /** 終わりを受け取りそこねた指を離したことにする */
+  const sweep = (e: TouchEvent) => {
+    const alive = new Set([...e.touches].map((t) => t.identifier));
+    for (const id of [...touches.keys()]) if (!alive.has(id)) endTouch(id);
+  };
+  // iOS Safari は touch-action だけでは素早い 2 回のタップを拡大と見なすことがあるので、既定の動作も止める。
+  // パッドの間のすき間も含める
+  el.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    sweep(e);
+    for (const t of e.changedTouches) {
+      const i = pads.findIndex((pad) => pad.contains(t.target as Node));
+      if (i < 0) continue;
+      touches.set(t.identifier, i);
+      press(i, touchId(t.identifier));
+    }
+  }, { passive: false });
+  for (const type of ["touchend", "touchcancel"] as const) {
+    el.addEventListener(type, (e) => {
+      e.preventDefault();
+      for (const t of e.changedTouches) endTouch(t.identifier);
+      sweep(e);
+    }, { passive: false });
+  }
 
   return {
     el,
