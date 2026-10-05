@@ -929,6 +929,10 @@ svg.chart {
   background: var(--bg);
 }
 
+.paddle-pads.single {
+  grid-template-columns: 1fr;
+}
+
 .paddle-pad {
   height: 30dvh;
   min-height: 140px;

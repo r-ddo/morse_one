@@ -297,3 +297,21 @@ describe("findTonePeak", () => {
     expect(peak.snrDb).toBeCloseTo(70);
   });
 });
+
+describe("MorseDecoder with biasLocked", () => {
+  it("decodes weighted keying without treating the weight as stretch", () => {
+    // 20 WPM（短点 60 ms）で、符号を 20 ms 長く・間を 20 ms 短く送る（重めの縦振電鍵の癖）
+    const decoder = new MorseDecoder(20);
+    decoder.biasLocked = true;
+    const weight = 0.02;
+    const intervals = toIntervals("PARIS PARIS", farnsworth(20, 20)).map(([on, off]) => [on, off + weight]);
+    const events: DecodeEvent[] = [];
+    for (const [on, off] of intervals) {
+      events.push(...decoder.keyDown(on), ...decoder.keyUp(off));
+    }
+    events.push(...decoder.tick(intervals.at(-1)![1] + 2));
+    const text = events.map((e) => (e.type === "char" ? e.char : e.type === "word" ? " " : "")).join("").trim();
+    expect(text).toBe("PARIS PARIS");
+    expect(decoder.bias).toBe(0);
+  });
+});

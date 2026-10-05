@@ -87,8 +87,8 @@ const LOOKAHEAD = 0.015;
 /** キーヤーを進める間隔（ミリ秒） */
 const STEP_MS = 5;
 
-export interface PaddleOptions {
-  /** 符号の速度（WPM） */
+export interface VirtualKeyOptions {
+  /** 符号の速度（WPM）。縦振電鍵では推定の初期値 */
   wpm: number;
   /** サイドトーンの周波数（Hz） */
   freq: number;
@@ -97,12 +97,11 @@ export interface PaddleOptions {
 }
 
 /**
- * 画面のタッチやキーボードで操作する仮想のパドル。エレキーで符号を作ってサイドトーンを鳴らし、
+ * 画面のタッチやキーボードで操作する仮想の電鍵の共通部分。サイドトーンを鳴らし、
  * キーの上げ下げをそのまま復号する（時刻は AudioContext の currentTime、秒）
  */
-export class VirtualPaddle {
+abstract class VirtualKey {
   decoder: MorseDecoder;
-  private readonly keyer: IambicKeyer;
   private readonly ctx: AudioContext;
   private readonly osc: OscillatorNode;
   private readonly gain: GainNode;
@@ -113,7 +112,7 @@ export class VirtualPaddle {
 
   /** ユーザー操作のハンドラ内で作ること（iOS の自動再生制限のため） */
   constructor(
-    private readonly opts: PaddleOptions,
+    protected readonly opts: VirtualKeyOptions,
     private readonly onEvents: (events: DecodeEvent[], now: number) => void,
   ) {
     const session = (navigator as AudioSessionNavigator).audioSession;
@@ -128,7 +127,6 @@ export class VirtualPaddle {
     this.osc.start();
 
     this.decoder = this.newDecoder();
-    this.keyer = new IambicKeyer(1.2 / opts.wpm, (down, t) => this.key(down, t));
     this.timer = setInterval(() => this.step(), STEP_MS);
   }
 
@@ -141,6 +139,60 @@ export class VirtualPaddle {
     const now = this.now;
     return this.downAt !== null && this.downAt <= now && (this.upAt === null || this.upAt < this.downAt || now < this.upAt);
   }
+
+  /** 復号をやり直す */
+  resetDecoder(): void {
+    this.decoder = this.newDecoder();
+  }
+
+  close(): void {
+    clearInterval(this.timer);
+    this.osc.stop();
+    void this.ctx.close().catch(() => {});
+  }
+
+  protected abstract newDecoder(): MorseDecoder;
+
+  /** 定期的に呼ばれる。時刻 now までのキーの上げ下げを済ませる */
+  protected advance(_now: number): void {}
+
+  /** キーを時刻 t（今か少し先）に上げ下げする */
+  protected key(down: boolean, t: number): void {
+    const g = this.gain.gain;
+    const at = Math.max(t, this.ctx.currentTime);
+    if (down) {
+      this.downAt = t;
+      g.cancelScheduledValues(at);
+      g.setValueAtTime(0, at);
+      g.linearRampToValueAtTime(this.opts.volume, at + RAMP);
+      this.pendingEvents.push(...this.decoder.keyDown(t));
+    } else {
+      this.upAt = t;
+      g.cancelScheduledValues(at);
+      g.setValueAtTime(this.opts.volume, at);
+      g.linearRampToValueAtTime(0, at + RAMP);
+      this.pendingEvents.push(...this.decoder.keyUp(t));
+    }
+  }
+
+  protected flush(): void {
+    if (this.pendingEvents.length === 0) return;
+    const events = this.pendingEvents;
+    this.pendingEvents = [];
+    this.onEvents(events, this.now);
+  }
+
+  private step(): void {
+    const now = this.now;
+    this.advance(now);
+    this.pendingEvents.push(...this.decoder.tick(now));
+    this.flush();
+  }
+}
+
+/** 画面のパドル。エレキーで符号を作る */
+export class VirtualPaddle extends VirtualKey {
+  private readonly keyer = new IambicKeyer(1.2 / this.opts.wpm, (down, t) => this.key(down, t));
 
   get wpm(): number {
     return this.opts.wpm;
@@ -156,52 +208,36 @@ export class VirtualPaddle {
     this.flush();
   }
 
-  /** 復号をやり直す */
-  resetDecoder(): void {
-    this.decoder = this.newDecoder();
-  }
-
-  close(): void {
-    clearInterval(this.timer);
-    this.osc.stop();
-    void this.ctx.close().catch(() => {});
-  }
-
-  private newDecoder(): MorseDecoder {
+  protected newDecoder(): MorseDecoder {
     const decoder = new MorseDecoder(this.opts.wpm);
     // 符号の長さはエレキーが正確に作るので、速度は推定しない
     decoder.speedLocked = true;
     return decoder;
   }
 
-  private step(): void {
-    const now = this.now;
+  protected override advance(now: number): void {
     this.keyer.advance(now + LOOKAHEAD);
-    this.pendingEvents.push(...this.decoder.tick(now));
+  }
+}
+
+/** 画面の縦振電鍵。押している間だけキーを下げる。符号の長さも速度も人が決めるので、速度は推定し続ける */
+export class VirtualStraightKey extends VirtualKey {
+  press(): void {
+    if (this.keyDown) return;
+    this.key(true, this.now);
     this.flush();
   }
 
-  private key(down: boolean, t: number): void {
-    const g = this.gain.gain;
-    const at = Math.max(t, this.ctx.currentTime);
-    if (down) {
-      this.downAt = t;
-      g.cancelScheduledValues(at);
-      g.setValueAtTime(0, at);
-      g.linearRampToValueAtTime(this.opts.volume, at + RAMP);
-      this.pendingEvents.push(...this.decoder.keyDown(t));
-    } else {
-      this.upAt = t;
-      g.setValueAtTime(this.opts.volume, at - RAMP);
-      g.linearRampToValueAtTime(0, at);
-      this.pendingEvents.push(...this.decoder.keyUp(t));
-    }
+  release(): void {
+    if (!this.keyDown) return;
+    this.key(false, this.now);
+    this.flush();
   }
 
-  private flush(): void {
-    if (this.pendingEvents.length === 0) return;
-    const events = this.pendingEvents;
-    this.pendingEvents = [];
-    this.onEvents(events, this.now);
+  protected newDecoder(): MorseDecoder {
+    const decoder = new MorseDecoder(this.opts.wpm);
+    // 音を拾うわけではないので、符号が長く・間が短いのは送り方の癖。補正せずにそのまま見せる
+    decoder.biasLocked = true;
+    return decoder;
   }
 }

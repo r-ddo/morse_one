@@ -1,6 +1,6 @@
 import type { DecodeEvent, MorseDecoder } from "../audio/decoder";
 import { KeyListener } from "../audio/listener";
-import { VirtualPaddle } from "../audio/paddle";
+import { VirtualPaddle, VirtualStraightKey } from "../audio/paddle";
 import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { farnsworth } from "../audio/timing";
@@ -11,7 +11,8 @@ import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, select } from "./form";
-import { paddlePads, paddleSettingsCard } from "./paddlePads";
+import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad, type TouchPads } from "./paddlePads";
+import type { Settings } from "../storage/settings";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
@@ -35,6 +36,8 @@ type SendMode = { kind: "group" } | { kind: "mock"; cpm: number; minutes: number
 /** 前回固定した周波数（Hz）と速度（WPM）。次の練習の初期値にする */
 let lastFreq = 700;
 let lastWpm = 20;
+/** 画面の縦振電鍵で前回推定した速度（WPM）。次の練習の初期値にする */
+let lastStraightWpm = 15;
 
 /** 送信の入力（練習機の音を拾うマイクか、画面のパドル）に共通の部分 */
 interface SendInput {
@@ -67,26 +70,32 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
   const mockText = () => `お題 ${ctx.settings.sendMockCpm * ctx.settings.sendMockMinutes} 字`;
   const mockLength = h("div", { class: "note" }, mockText());
   const paddleSettings = paddleSettingsCard(ctx);
-  paddleSettings.hidden = s.sendInput !== "paddle";
-  const startLabel = () => (ctx.settings.sendInput === "paddle" ? "はじめる" : "マイクを開始");
+  const straightSettings = h("div", { class: "settings" }, straightKeyNote());
+  const showInput = (v: Settings["sendInput"]) => {
+    paddleSettings.hidden = v !== "paddle";
+    straightSettings.hidden = v !== "straight";
+  };
+  showInput(s.sendInput);
+  const startLabel = () => (ctx.settings.sendInput === "mic" ? "マイクを開始" : "はじめる");
   const startBtn = h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, startLabel());
   ctx.render(
     h("h1", {}, "送信練習"),
     h("p", { class: "note" },
-      "練習機のサイドトーンを iPhone のマイクで拾うか、画面のパドルで送った符号を復号・採点します。" +
+      "練習機のサイドトーンを iPhone のマイクで拾うか、画面のパドル・縦振電鍵で送った符号を復号・採点します。" +
       "マイクのときは送信中にアプリから音を出しません。採点は試験の基準（誤字・脱字・冗字 3 点、符号不明りょう 1 点など）です"),
     h("div", { class: "settings" },
       field("入力", select(
-        [["mic", "練習機の音（マイク）"], ["paddle", "画面のパドル"]],
+        INPUT_OPTIONS,
         s.sendInput,
         (v) => {
-          ctx.updateSettings({ sendInput: v as "mic" | "paddle" });
-          paddleSettings.hidden = v !== "paddle";
+          ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
+          showInput(v as Settings["sendInput"]);
           startBtn.textContent = startLabel();
         },
       )),
     ),
     paddleSettings,
+    straightSettings,
     h("div", { class: "settings" },
       field("文字セット", select(
         Object.entries(CHARSET_LABELS).map(([v, l]) => [v, l]),
@@ -144,7 +153,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
           ...sends.slice(0, 5).map((r) =>
             h("tr", {},
               h("th", {}, new Date(r.ts).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })),
-              h("td", {}, (r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ") + (r.input === "paddle" ? "（画面）" : "")),
+              h("td", {}, (r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ") + (r.input === "paddle" ? "（パドル）" : r.input === "straight" ? "（縦振）" : "")),
               h("td", {}, `${r.points} 点`),
               h("td", {}, r.cpm === null ? "―" : `${Math.round(r.cpm)} 字/分`),
               h("td", {}, `${r.target.length} 字`),
@@ -190,17 +199,22 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     if (session.handle(events, now)) dirty = true;
   };
 
-  const usePaddle = ctx.settings.sendInput === "paddle";
+  const via = ctx.settings.sendInput;
   let input: SendInput | null = null;
-  let pads: ReturnType<typeof paddlePads> | null = null;
-  if (usePaddle) {
-    // タップの中で AudioContext を作る（iOS の自動再生制限のため）
-    const { paddleWpm, freq, volume, paddleSwap } = ctx.settings;
+  let pads: TouchPads | null = null;
+  // タップの中で AudioContext を作る（iOS の自動再生制限のため）
+  const { paddleWpm, freq, volume, paddleSwap } = ctx.settings;
+  if (via === "paddle") {
     const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents);
     input = paddle;
     pads = paddlePads(paddle, paddleSwap);
     // 符号の長さと速度はエレキーが決めるので、VVV で合わせる必要はない
     session.skipWarmup();
+  } else if (via === "straight") {
+    // 速度は送り方で決まるので、VVV で推定を合わせてから始める（固定はしない）
+    const key = new VirtualStraightKey({ wpm: lastStraightWpm, freq, volume }, onEvents);
+    input = key;
+    pads = straightKeyPad(key);
   }
 
   ctx.render(
@@ -274,8 +288,10 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       }
       const locked = session.phase === "warmup" ? "" : "（固定）";
       speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
-    } else {
+    } else if (via === "paddle") {
       speed.textContent = `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`;
+    } else {
+      speed.textContent = `画面の縦振電鍵・推定 ${l.decoder.wpm.toFixed(1)} WPM`;
     }
     pending.textContent = prettyCode(l.decoder.pendingCode);
     if (mode.kind === "mock") renderClock(clock, session, mode, l.now);
@@ -283,9 +299,11 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       lastPhase = session.phase;
       status.textContent = session.phase === "sending" && mode.kind === "mock"
         ? "送信中… 時間になるか、送り終えて 3 秒たつと終了します"
-        : session.phase === "ready" && usePaddle
+        : session.phase === "ready" && via === "paddle"
           ? "お題を送ってください"
-          : STATUS[session.phase];
+          : session.phase === "warmup" && via === "straight"
+            ? "まず VVV を送ってください（速度の推定を合わせます）"
+            : STATUS[session.phase];
       skipBtn.hidden = session.phase !== "warmup";
     }
     if (dirty) {
@@ -305,7 +323,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
 
   function finish(): void {
     const wpm = input?.decoder.wpm ?? 0;
-    const via = usePaddle ? "paddle" : "mic";
+    if (via === "straight" && input) lastStraightWpm = input.decoder.wpm;
     close();
     ctx.setActive(null);
     session.finish();

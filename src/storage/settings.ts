@@ -1,5 +1,7 @@
 import type { CharsetId } from "../training/charset";
 
+export type SendInput = "mic" | "paddle" | "straight";
+
 export interface Settings {
   charset: CharsetId;
   /** 文字速度（WPM） */
@@ -40,8 +42,8 @@ export interface Settings {
   sendMockMinutes: number;
   /** グループ送信で、送信の苦手な文字を多めに出すか */
   sendFocusWeak: boolean;
-  /** 送信練習の入力。練習機の音をマイクで拾うか、画面（キーボード）のパドルを使うか */
-  sendInput: "mic" | "paddle";
+  /** 送信練習の入力。練習機の音をマイクで拾うか、画面（キーボード）のパドルか縦振電鍵を使うか */
+  sendInput: SendInput;
   /** 画面のパドルの速度（WPM） */
   paddleWpm: number;
   /** 画面のパドルの左右を入れ替える（既定は左が短点） */

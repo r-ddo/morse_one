@@ -59,6 +59,8 @@ export class MorseDecoder {
   bias = 0;
   /** true なら短点長と伸びの推定を止める（練習機の速度は練習の途中で変わらないので、確認できたら固定する） */
   speedLocked = false;
+  /** true なら伸びを推定しない（今の値のまま）。音を拾わず、キーの上げ下げをそのまま受け取るとき */
+  biasLocked = false;
   private readonly recentMarks: number[] = [];
   /** 直近の間の長さ（符号内・文字間・語間すべて） */
   private readonly recentGaps: number[] = [];
@@ -183,6 +185,7 @@ export class MorseDecoder {
     }
     if (!(dot > 0)) return;
     this.dot = dot;
+    if (this.biasLocked) return;
     this.bias = Math.min(BIAS_RANGE[1] * dot, Math.max(BIAS_RANGE[0] * dot, bias));
   }
 

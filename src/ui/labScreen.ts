@@ -2,11 +2,12 @@ import type { DecodeEvent, GapKind } from "../audio/decoder";
 import type { DetectorFrame } from "../audio/keying";
 import { FREQ_MAX, FREQ_MIN, KeyListener } from "../audio/listener";
 import type { MicProcessing } from "../audio/mic";
-import { VirtualPaddle } from "../audio/paddle";
+import { VirtualPaddle, VirtualStraightKey } from "../audio/paddle";
+import type { Settings } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, range, select } from "./form";
-import { paddlePads, paddleSettingsCard } from "./paddlePads";
+import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
@@ -53,7 +54,9 @@ export function showLab(ctx: ScreenContext): void {
   ctx.player.release();
   let session: LabSession | null = null;
   let starting = false;
-  const usePaddle = ctx.settings.sendInput === "paddle";
+  const via = ctx.settings.sendInput;
+  /** 画面のパドルか縦振電鍵（マイクを使わない） */
+  const onScreen = via !== "mic";
 
   /** 入力やパドルの設定を変えたら、止めて画面を作り直す */
   const rebuild = () => {
@@ -62,25 +65,28 @@ export function showLab(ctx: ScreenContext): void {
     showLab(ctx);
   };
   const inputSelect = field("入力", select(
-    [["mic", "練習機の音（マイク）"], ["paddle", "画面のパドル"]],
-    ctx.settings.sendInput,
+    INPUT_OPTIONS,
+    via,
     (v) => {
-      ctx.updateSettings({ sendInput: v as "mic" | "paddle" });
+      ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
       rebuild();
     },
   ));
-  // パドルは最初に押したときに始める（そのタップの中で音を出せるようにする）
-  const pads = usePaddle
+  // 画面のパドル・縦振電鍵は最初に押したときに始める（そのタップの中で音を出せるようにする）
+  const onScreenKey = () => (session ??= LabSession.onScreen(ctx, view)).input;
+  const pads = via === "paddle"
     ? paddlePads({
-      press: (p) => {
-        session ??= LabSession.paddle(ctx, view);
-        session.paddle?.press(p);
-      },
-      release: (p) => session?.paddle?.release(p),
+      press: (p) => (onScreenKey() as VirtualPaddle).press(p),
+      release: (p) => (session?.input as VirtualPaddle | undefined)?.release(p),
     }, ctx.settings.paddleSwap)
-    : null;
+    : via === "straight"
+      ? straightKeyPad({
+        press: () => (onScreenKey() as VirtualStraightKey).press(),
+        release: () => (session?.input as VirtualStraightKey | undefined)?.release(),
+      })
+      : null;
 
-  const startBtn = h("button", { type: "button", class: "primary", hidden: usePaddle, onclick: () => void toggle() }, "マイクを開始");
+  const startBtn = h("button", { type: "button", class: "primary", hidden: onScreen, onclick: () => void toggle() }, "マイクを開始");
   const info = h("div", { class: "lab-info" }, "開始すると、実際に適用された設定をここに表示します");
 
   const checks = PROCESSING_LABELS.map(([key, label]) => {
@@ -127,21 +133,22 @@ export function showLab(ctx: ScreenContext): void {
 
   ctx.render(
     h("h1", {}, "送信実験"),
-    h("p", { class: "note" }, usePaddle
-      ? "画面のパドルで送った符号を復号し、符号と間の長さを表示します。パッドを押すと始まります"
+    h("p", { class: "note" }, onScreen
+      ? `画面の${via === "paddle" ? "パドル" : "縦振電鍵"}で送った符号を復号し、符号と間の長さを表示します。パッドを押すと始まります`
       : "練習機のサイドトーンをマイクから入力して、トーンのオン/オフと符号を検出します。" +
         "内蔵マイクでスピーカーの音を拾っても、有線でつないでもかまいません"),
     h("div", { class: "settings" }, inputSelect),
-    usePaddle && paddleSettingsCard(ctx, rebuild),
+    via === "paddle" && paddleSettingsCard(ctx, rebuild),
+    via === "straight" && h("div", { class: "settings" }, straightKeyNote()),
     startBtn,
-    !usePaddle && h("div", { class: "settings" },
+    !onScreen && h("div", { class: "settings" },
       h("h2", {}, "ブラウザの音声処理（オフ推奨）"),
       ...checks,
       info,
     ),
-    usePaddle
+    onScreen
       ? h("div", { class: "chart-card lab-monitor" },
-        h("div", { class: "lab-tiles" }, view.lamp, tile("速度", view.wpm)))
+        h("div", { class: "lab-tiles" }, view.lamp, tile(via === "paddle" ? "速度" : "推定速度", view.wpm)))
       : h("div", { class: "chart-card lab-monitor" },
         h("div", { class: "lab-tiles" }, view.lamp, tile("推定速度", view.wpm), tile("周波数", view.freq), tile("入力レベル", view.level)),
         view.envelope,
@@ -221,19 +228,22 @@ class LabSession {
   private releaseScreen: () => void = () => {};
 
   private constructor(
-    private readonly input: KeyListener | VirtualPaddle,
+    readonly input: KeyListener | VirtualPaddle | VirtualStraightKey,
     private readonly view: LabView,
   ) {
     void keepScreenOn().then((release) => (this.releaseScreen = release));
     this.raf = requestAnimationFrame(this.draw);
   }
 
-  /** ユーザー操作のハンドラ内で呼ぶこと */
-  static paddle(ctx: ScreenContext, view: LabView): LabSession {
+  /** 画面のパドルか縦振電鍵（設定の入力による）。ユーザー操作のハンドラ内で呼ぶこと */
+  static onScreen(ctx: ScreenContext, view: LabView): LabSession {
     let session: LabSession | null = null;
-    const { paddleWpm, freq, volume } = ctx.settings;
-    const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, (events) => session?.apply(events));
-    session = new LabSession(paddle, view);
+    const { sendInput, paddleWpm, freq, volume } = ctx.settings;
+    const onEvents = (events: DecodeEvent[]) => session?.apply(events);
+    const input = sendInput === "paddle"
+      ? new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents)
+      : new VirtualStraightKey({ wpm: 15, freq, volume }, onEvents);
+    session = new LabSession(input, view);
     return session;
   }
 
@@ -251,11 +261,6 @@ class LabSession {
     listener.decoder.speedLocked = options.speedLocked;
     session = new LabSession(listener, view);
     return session;
-  }
-
-  /** 画面のパドルのときはそのパドル */
-  get paddle(): VirtualPaddle | null {
-    return this.input instanceof VirtualPaddle ? this.input : null;
   }
 
   /** マイクのときはその入力 */
@@ -390,7 +395,9 @@ class LabSession {
       h("p", { class: "note" }, this.listener
         ? `長さは推定短点長を 1 とし、残響などによる伸びを補正した値（直近 ${STATS_WINDOW} 個）。` +
           `推定の伸び ${stretch}（符号はこれだけ長く、間は短く測れている）`
-        : `長さは短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。符号と符号内の間はエレキーが作るので、見るのは文字間・語間`),
+        : this.input instanceof VirtualPaddle
+          ? `長さは短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。符号と符号内の間はエレキーが作るので、見るのは文字間・語間`
+          : `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。伸びは補正しないので、短点が長く符号内の間が短ければ送り方の癖`),
     );
   }
 }

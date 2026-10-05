@@ -157,7 +157,7 @@ export class SendSession {
       wordGapCv: quality.wordGap?.cv ?? null,
       ...(fields.minutes !== undefined ? { minutes: fields.minutes } : {}),
       ...(fields.targetCpm !== undefined ? { targetCpm: fields.targetCpm } : {}),
-      ...(fields.input === "paddle" ? { input: fields.input } : {}),
+      ...(fields.input && fields.input !== "mic" ? { input: fields.input } : {}),
       marks: markString(score),
       sentAt: score.sentAt,
     };

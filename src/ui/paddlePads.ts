@@ -1,4 +1,5 @@
 import type { Paddle } from "../audio/paddle";
+import type { SendInput } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h } from "./dom";
 import { field, select } from "./form";
@@ -7,6 +8,20 @@ import { field, select } from "./form";
 export interface PaddleTarget {
   press(p: Paddle): void;
   release(p: Paddle): void;
+}
+
+/** 送信の入力の選択肢 */
+export const INPUT_OPTIONS: [SendInput, string][] = [
+  ["mic", "練習機の音（マイク）"],
+  ["paddle", "画面のパドル"],
+  ["straight", "画面の縦振電鍵"],
+];
+
+/** 画面の縦振電鍵の説明 */
+export function straightKeyNote(): HTMLElement {
+  return h("p", { class: "note" },
+    "画面下の大きなパッドを押している間だけ鳴ります（パソコンではキーボードの ↓ か →）。" +
+    "符号の長さも速度も自分で決めるので、速度は送り方から推定し続けます");
 }
 
 /** 画面のパドルの設定（速度・左右の入れ替え）。onChange は設定を変えたあとに呼ぶ */
@@ -37,34 +52,73 @@ export function paddleSettingsCard(ctx: ScreenContext, onChange: () => void = ()
  * 画面のパドル。左右のパッドをタッチ（複数の指を同時に）で押し、キーボードでは ↓ が左・→ が右。
  * 既定は左が短点・右が長点で、swap なら入れ替える
  */
-export function paddlePads(paddle: PaddleTarget, swap: boolean) {
+export function paddlePads(paddle: PaddleTarget, swap: boolean): TouchPads {
   const sides: [Paddle, Paddle] = swap ? ["dash", "dot"] : ["dot", "dash"];
-  const keys: Record<string, 0 | 1> = { ArrowDown: 0, ArrowRight: 1 };
+  return touchPads(sides.map((side, i) => ({
+    label: side === "dot" ? "·" : "−",
+    hint: i === 0 ? "↓" : "→",
+    keys: [i === 0 ? "ArrowDown" : "ArrowRight"],
+    press: () => paddle.press(side),
+    release: () => paddle.release(side),
+  })));
+}
+
+/** 画面の縦振電鍵。1 つの大きなパッドを押している間だけキーを下げる。キーボードでは ↓ か → */
+export function straightKeyPad(key: { press(): void; release(): void }): TouchPads {
+  return touchPads([{
+    label: "電鍵",
+    hint: "押している間だけ鳴ります（↓ / →）",
+    keys: ["ArrowDown", "ArrowRight"],
+    press: () => key.press(),
+    release: () => key.release(),
+  }]);
+}
+
+export interface TouchPads {
+  el: HTMLElement;
+  /** キーを押したとき。パッドのキーなら true */
+  key(e: KeyboardEvent): boolean;
+  detach(): void;
+}
+
+interface PadSpec {
+  label: string;
+  hint: string;
+  /** このパッドを押すキー（KeyboardEvent.key） */
+  keys: string[];
+  press(): void;
+  release(): void;
+}
+
+/** タッチとキーボードで押すパッドを並べる。同じパッドを複数の指・キーで押しても、押す・離すは 1 回ずつ */
+function touchPads(specs: PadSpec[]): TouchPads {
+  const keys = new Map<string, number>();
+  specs.forEach((spec, i) => spec.keys.forEach((k) => keys.set(k, i)));
   /** パッドごとに押している指（ポインター）とキー */
-  const pressing = [new Set<number | string>(), new Set<number | string>()];
-  const press = (i: 0 | 1, who: number | string) => {
+  const pressing = specs.map(() => new Set<number | string>());
+  const press = (i: number, who: number | string) => {
     const set = pressing[i];
     if (set.has(who)) return;
     set.add(who);
     if (set.size === 1) {
       pads[i].classList.add("pressed");
-      paddle.press(sides[i]);
+      specs[i].press();
     }
   };
-  const release = (i: 0 | 1, who: number | string) => {
+  const release = (i: number, who: number | string) => {
     const set = pressing[i];
     if (!set.delete(who) || set.size > 0) return;
     pads[i].classList.remove("pressed");
-    paddle.release(sides[i]);
+    specs[i].release();
   };
   const releaseAll = () => {
-    for (const i of [0, 1] as const) for (const who of [...pressing[i]]) release(i, who);
+    pressing.forEach((set, i) => [...set].forEach((who) => release(i, who)));
   };
 
-  const pads = ([0, 1] as const).map((i) => {
+  const pads = specs.map((spec, i) => {
     const pad = h("div", { class: "paddle-pad" },
-      h("span", { class: "paddle-code" }, sides[i] === "dot" ? "·" : "−"),
-      h("span", { class: "paddle-key" }, i === 0 ? "↓" : "→"));
+      h("span", { class: "paddle-code" }, spec.label),
+      h("span", { class: "paddle-key" }, spec.hint));
     pad.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       // 指を少し動かしても離したことにならないよう、ポインターを捕まえておく
@@ -79,17 +133,16 @@ export function paddlePads(paddle: PaddleTarget, swap: boolean) {
   });
 
   const onKeyUp = (e: KeyboardEvent) => {
-    const i = keys[e.key];
+    const i = keys.get(e.key);
     if (i !== undefined) release(i, e.key);
   };
   document.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", releaseAll);
 
   return {
-    el: h("div", { class: "paddle-pads" }, ...pads),
-    /** キーを押したとき。パドルのキーなら true */
+    el: h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads),
     key(e: KeyboardEvent): boolean {
-      const i = keys[e.key];
+      const i = keys.get(e.key);
       if (i === undefined) return false;
       if (!e.repeat) press(i, e.key);
       return true;
@@ -100,4 +153,3 @@ export function paddlePads(paddle: PaddleTarget, swap: boolean) {
     },
   };
 }
-
