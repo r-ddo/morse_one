@@ -218,7 +218,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   }
 
   ctx.render(
-    h("div", { class: "drill" },
+    h("div", { class: pads ? "drill keyed" : "drill" },
       h("div", { class: "row" },
         progress,
         h("button", { type: "button", class: "small", onclick: () => ctx.stopDrill() }, "中断"),
@@ -315,7 +315,14 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       const group = Math.floor(pos / 5);
       if (group !== shownGroup) {
         shownGroup = group;
-        grid.children[Math.min(group, grid.children.length - 1)]?.scrollIntoView({ block: "center", behavior: "smooth" });
+        const el = grid.children[Math.min(group, grid.children.length - 1)] as HTMLElement | undefined;
+        if (el && pads) {
+          // 画面のパドル・縦振電鍵では、お題の欄の中だけを一気にスクロールする。iOS ではスクロールのアニメーション中に触れると、
+          // そのタッチはスクロールを止めるのに使われてページに届かず、組の最初の符号を取りこぼす
+          grid.scrollTop = el.offsetTop - (grid.clientHeight - el.offsetHeight) / 2;
+        } else {
+          el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
       }
     }
   };

@@ -146,6 +146,25 @@ button.small {
   -webkit-user-select: none;
 }
 
+/* 画面のパドル・縦振電鍵。ページはスクロールさせず（パッドは画面下に固定）、お題の欄の中だけをスクロールする */
+.drill.keyed {
+  height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
+  min-height: 0;
+}
+
+.drill.keyed .send-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+  align-content: start;
+}
+
+.drill.keyed .paddle-pads {
+  position: static;
+  padding-bottom: 0;
+}
+
 .progress {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
