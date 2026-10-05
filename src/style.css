@@ -999,3 +999,7 @@ svg.chart {
   margin: 0;
   white-space: pre-wrap;
 }
+
+.build-id {
+  text-align: center;
+}

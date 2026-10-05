@@ -1,7 +1,20 @@
+import { execSync } from "node:child_process";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
+/** 画面に出す版（コミットの短い ID）。iPhone で古い版のまま試していないか確かめるため */
+function buildId(): string {
+  try {
+    return execSync("git rev-parse --short HEAD").toString().trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig({
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId()),
+  },
   build: {
     // AudioWorklet を data: URL で読み込めない環境があるので、ファイルとして出力する
     assetsInlineLimit: (file) => (file.endsWith("-worklet.js") ? false : undefined),

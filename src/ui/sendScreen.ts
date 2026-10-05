@@ -72,7 +72,16 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
   const mockLength = h("div", { class: "note" }, mockText());
   const paddleSettings = paddleSettingsCard(ctx);
   const straightSettings = h("div", { class: "settings" }, straightKeyNote());
+  const layoutSettings = h("div", { class: "settings" },
+    field("画面の配置（実験）", select(
+      [["fit", "画面に収める（標準）"], ["page", "送信実験と同じ（ページの下にパッド）"]],
+      s.sendPadLayout,
+      (v) => ctx.updateSettings({ sendPadLayout: v as Settings["sendPadLayout"] }),
+    )),
+    h("p", { class: "note" }, "送信練習の画面でだけ短点のタッチが届かない問題を調べるための切り替えです"),
+  );
   const showInput = (v: Settings["sendInput"]) => {
+    layoutSettings.hidden = v === "mic";
     paddleSettings.hidden = v !== "paddle";
     straightSettings.hidden = v !== "straight";
   };
@@ -97,6 +106,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     ),
     paddleSettings,
     straightSettings,
+    layoutSettings,
     h("div", { class: "settings" },
       field("文字セット", select(
         Object.entries(CHARSET_LABELS).map(([v, l]) => [v, l]),
@@ -199,6 +209,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   const via = ctx.settings.sendInput;
   // 画面のパドル・縦振電鍵では、届いたタッチを記録して結果画面に出す（取りこぼしの原因を実機で調べるため）
   const log = via === "mic" ? null : touchLog({ live: false });
+  log?.add(`配置 ${ctx.settings.sendPadLayout}`);
   const onEvents = (events: DecodeEvent[], now: number) => {
     if (log) for (const e of events) if (e.type === "char") log.add(`文字 ${e.char ?? prettyCode(e.code)}`);
     if (session.handle(events, now)) dirty = true;
@@ -240,8 +251,10 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     });
   }
 
+  /** 画面のパドル・縦振電鍵で、画面に収める配置か */
+  const fit = pads !== null && ctx.settings.sendPadLayout === "fit";
   ctx.render(
-    h("div", { class: pads ? "drill keyed" : "drill" },
+    h("div", { class: fit ? "drill keyed" : "drill" },
       h("div", { class: "row" },
         progress,
         h("button", { type: "button", class: "small", onclick: () => ctx.stopDrill() }, "中断"),
@@ -252,8 +265,10 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       grid,
       pending,
       h("div", { class: "row" }, skipBtn, finishBtn),
-      pads?.el,
+      fit && pads?.el,
     ),
+    // 送信実験と同じ配置では、パッドは練習の欄の外（ページの下に固定）
+    !fit && pads ? pads.el : null,
   );
 
   const close = () => {
@@ -354,12 +369,13 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       if (group !== shownGroup) {
         shownGroup = group;
         const el = grid.children[Math.min(group, grid.children.length - 1)] as HTMLElement | undefined;
-        if (el && pads) {
+        if (el && fit) {
           // 画面のパドル・縦振電鍵では、お題の欄の中だけを一気にスクロールする。iOS ではスクロールのアニメーション中に触れると、
           // そのタッチはスクロールを止めるのに使われてページに届かず、組の最初の符号を取りこぼす
           grid.scrollTop = el.offsetTop - (grid.clientHeight - el.offsetHeight) / 2;
         } else {
-          el?.scrollIntoView({ block: "center", behavior: "smooth" });
+          // 画面のパドル・縦振電鍵ではアニメーションなしで（アニメーション中のタッチは iOS がスクロールを止めるのに使う）
+          el?.scrollIntoView({ block: "center", behavior: pads ? "instant" : "smooth" });
         }
       }
     }

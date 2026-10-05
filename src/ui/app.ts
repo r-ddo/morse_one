@@ -96,6 +96,7 @@ export class App {
         h("button", { type: "button", onclick: () => void showStats(this.ctx) }, "成績"),
       ),
       h("button", { type: "button", onclick: () => showLab(this.ctx) }, "送信実験"),
+      h("p", { class: "note build-id" }, `版 ${__BUILD_ID__}`),
     );
   }
 

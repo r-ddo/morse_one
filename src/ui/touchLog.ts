@@ -63,6 +63,7 @@ export function touchLog({ live, max = live ? 60 : 300 }: { live: boolean; max?:
     }
   };
   for (const type of LOGGED_EVENTS) document.addEventListener(type, onEvent, { capture: true, passive: true });
+  add(`版 ${__BUILD_ID__}`);
 
   const clear = () => {
     lines.length = 0;

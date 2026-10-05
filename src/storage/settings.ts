@@ -48,6 +48,11 @@ export interface Settings {
   paddleWpm: number;
   /** 画面のパドルの左右を入れ替える（既定は左が短点） */
   paddleSwap: boolean;
+  /**
+   * 画面のパドル・縦振電鍵での送信練習の配置（実験）。fit: 画面に収め、お題の欄だけをスクロールする。
+   * page: 送信実験と同じく、ページの下にパッドを固定してページをスクロールする
+   */
+  sendPadLayout: "fit" | "page";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -75,6 +80,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sendInput: "mic",
   paddleWpm: 20,
   paddleSwap: false,
+  sendPadLayout: "fit",
 };
 
 const KEY = "morse_one.settings";
