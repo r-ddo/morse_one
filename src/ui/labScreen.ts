@@ -76,7 +76,7 @@ export function showLab(ctx: ScreenContext): void {
   ));
   // 画面のパドル・縦振電鍵は最初に押したときに始める（そのタップの中で音を出せるようにする）
   const onScreenKey = () => (session ??= LabSession.onScreen(ctx, view)).input;
-  const log = onScreen ? touchLog({ live: true }) : null;
+  const log = onScreen ? touchLog({ live: true, header: "送信実験" }) : null;
   const DOT_DASH = { dot: "短点", dash: "長点" } as const;
   const pads = via === "paddle"
     ? paddlePads({

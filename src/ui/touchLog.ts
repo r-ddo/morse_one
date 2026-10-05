@@ -23,15 +23,18 @@ export interface TouchLog {
  * 文書全体で（パッドより先に）受け取り、触れた場所（左・右のパッドかそれ以外）と時刻（ミリ秒）を残す。
  * live でなければ記録するだけで、el は detach() したときの内容を表示する（送信中は画面を重くしない）
  */
-export function touchLog({ live, max = live ? 60 : 300 }: { live: boolean; max?: number }): TouchLog {
+export function touchLog({ live, max = live ? 60 : 300, header = "" }: { live: boolean; max?: number; header?: string }): TouchLog {
   const lines: string[] = [];
+  /** 記録が多くなっても消さない先頭の行（版と、呼び出し側の条件） */
+  const head = [`版 ${__BUILD_ID__}`, header].filter(Boolean).join("・");
+  const text = () => [head, ...lines].join("\n");
   const pre = h("pre", { class: "touch-log" }, live ? "パッドを押すと、ここに届いたイベントを表示します" : "");
   let t0: number | null = null;
   let raf = 0;
 
   const render = () => {
     raf = 0;
-    pre.textContent = lines.join("\n");
+    pre.textContent = text();
   };
   const add = (text: string) => {
     const now = performance.now();
@@ -63,16 +66,15 @@ export function touchLog({ live, max = live ? 60 : 300 }: { live: boolean; max?:
     }
   };
   for (const type of LOGGED_EVENTS) document.addEventListener(type, onEvent, { capture: true, passive: true });
-  add(`版 ${__BUILD_ID__}`);
 
   const clear = () => {
     lines.length = 0;
     t0 = null;
-    pre.textContent = "";
+    pre.textContent = head;
   };
   const copyBtn = h("button", { type: "button", class: "small" }, "コピー");
   copyBtn.addEventListener("click", () => {
-    navigator.clipboard.writeText(lines.join("\n")).then(
+    navigator.clipboard.writeText(text()).then(
       () => {
         copyBtn.textContent = "コピーしました";
         setTimeout(() => (copyBtn.textContent = "コピー"), 1500);

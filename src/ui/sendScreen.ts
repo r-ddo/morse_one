@@ -208,8 +208,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   let shownGroup = -1;
   const via = ctx.settings.sendInput;
   // 画面のパドル・縦振電鍵では、届いたタッチを記録して結果画面に出す（取りこぼしの原因を実機で調べるため）
-  const log = via === "mic" ? null : touchLog({ live: false });
-  log?.add(`配置 ${ctx.settings.sendPadLayout}`);
+  const log = via === "mic" ? null : touchLog({ live: false, header: `送信練習・配置 ${ctx.settings.sendPadLayout}` });
   const onEvents = (events: DecodeEvent[], now: number) => {
     if (log) for (const e of events) if (e.type === "char") log.add(`文字 ${e.char ?? prettyCode(e.code)}`);
     if (session.handle(events, now)) dirty = true;
