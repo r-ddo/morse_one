@@ -150,9 +150,6 @@ button.small {
 .drill.keyed {
   height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
   min-height: 0;
-  /* 文字の選択を禁止すると、iOS が 2 本目の指のタッチを数百ミリ秒止めることがあった（送信実験の画面では起きない）。疑わしいので外す */
-  user-select: auto;
-  -webkit-user-select: auto;
 }
 
 .drill.keyed .send-groups {
@@ -955,12 +952,6 @@ svg.chart {
   padding: 8px 0 max(8px, env(safe-area-inset-bottom));
   background: var(--bg);
   touch-action: none;
-}
-
-/* 既定の動作を止めない受け取り方では、ダブルタップでの拡大だけを止める */
-.paddle-pads.passive,
-.paddle-pads.passive .paddle-pad {
-  touch-action: manipulation;
 }
 
 .paddle-pads.single {

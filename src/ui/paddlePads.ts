@@ -1,5 +1,5 @@
 import type { Paddle } from "../audio/paddle";
-import type { PadTouch, SendInput } from "../storage/settings";
+import type { SendInput } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h } from "./dom";
 import { field, select } from "./form";
@@ -11,13 +11,6 @@ export interface PaddleTarget {
 }
 
 /** 送信の入力の選択肢 */
-/** パッドのタッチの受け取り方の選択肢 */
-export const PAD_TOUCH_OPTIONS: [PadTouch, string][] = [
-  ["touch", "タッチイベント・既定の動作を止める（標準）"],
-  ["passive", "タッチイベント・既定の動作を止めない"],
-  ["pointer", "ポインターイベント"],
-];
-
 export const INPUT_OPTIONS: [SendInput, string][] = [
   ["mic", "練習機の音（マイク）"],
   ["paddle", "画面のパドル"],
@@ -59,7 +52,7 @@ export function paddleSettingsCard(ctx: ScreenContext, onChange: () => void = ()
  * 画面のパドル。左右のパッドをタッチ（複数の指を同時に）で押し、キーボードでは ↓ が左・→ が右。
  * 既定は左が短点・右が長点で、swap なら入れ替える
  */
-export function paddlePads(paddle: PaddleTarget, swap: boolean, mode: PadTouch): TouchPads {
+export function paddlePads(paddle: PaddleTarget, swap: boolean): TouchPads {
   const sides: [Paddle, Paddle] = swap ? ["dash", "dot"] : ["dot", "dash"];
   return touchPads(sides.map((side, i) => ({
     label: side === "dot" ? "·" : "−",
@@ -67,18 +60,18 @@ export function paddlePads(paddle: PaddleTarget, swap: boolean, mode: PadTouch):
     keys: [i === 0 ? "ArrowDown" : "ArrowRight"],
     press: () => paddle.press(side),
     release: () => paddle.release(side),
-  })), mode);
+  })));
 }
 
 /** 画面の縦振電鍵。1 つの大きなパッドを押している間だけキーを下げる。キーボードでは ↓ か → */
-export function straightKeyPad(key: { press(): void; release(): void }, mode: PadTouch): TouchPads {
+export function straightKeyPad(key: { press(): void; release(): void }): TouchPads {
   return touchPads([{
     label: "電鍵",
     hint: "押している間だけ鳴ります（↓ / →）",
     keys: ["ArrowDown", "ArrowRight"],
     press: () => key.press(),
     release: () => key.release(),
-  }], mode);
+  }]);
 }
 
 export interface TouchPads {
@@ -101,7 +94,7 @@ const GESTURE_EVENTS = ["gesturestart", "gesturechange", "gestureend"] as const;
 const preventGesture = (e: Event) => e.preventDefault();
 
 /** タッチとキーボードで押すパッドを並べる。同じパッドを複数の指・キーで押しても、押す・離すは 1 回ずつ */
-function touchPads(specs: PadSpec[], mode: PadTouch): TouchPads {
+function touchPads(specs: PadSpec[]): TouchPads {
   const keys = new Map<string, number>();
   specs.forEach((spec, i) => spec.keys.forEach((k) => keys.set(k, i)));
   /** パッドごとに押している指（ポインター）とキー */
@@ -129,9 +122,9 @@ function touchPads(specs: PadSpec[], mode: PadTouch): TouchPads {
     const pad = h("div", { class: "paddle-pad" },
       h("span", { class: "paddle-code" }, spec.label),
       h("span", { class: "paddle-key" }, spec.hint));
-    // タッチは（pointer のとき以外）下のタッチイベントで受け取る。ポインターイベントはマウスとペンだけ
+    // タッチは下のタッチイベントで受け取る。ポインターイベントはマウスとペンだけ
     pad.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "touch" && mode !== "pointer") return;
+      if (e.pointerType === "touch") return;
       e.preventDefault();
       // 指を少し動かしても離したことにならないよう、ポインターを捕まえておく
       pad.setPointerCapture(e.pointerId);
@@ -152,50 +145,46 @@ function touchPads(specs: PadSpec[], mode: PadTouch): TouchPads {
   window.addEventListener("blur", releaseAll);
   // iOS Safari は、指を置いたまま別の指で触れると 2 本指の操作（ピンチでの拡大など）の始まりとみなし、
   // 2 本目のタッチを数百ミリ秒止めてから渡す（実機の記録で確認）。その操作（iOS 独自の gesture*）を止める
-  if (mode === "touch") for (const type of GESTURE_EVENTS) document.addEventListener(type, preventGesture, { passive: false });
+  for (const type of GESTURE_EVENTS) document.addEventListener(type, preventGesture, { passive: false });
 
-  const el = h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}${mode === "passive" ? " passive" : ""}` }, ...pads);
-  if (mode !== "pointer") listenTouches(mode === "touch");
+  const el = h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads);
 
-  /** タッチイベントで指ごとに受け取る。prevent なら既定の動作も止める（リスナーはパッドの要素に付けるので外さなくてよい） */
-  function listenTouches(prevent: boolean): void {
-    // タッチ。iOS Safari ではポインターイベントだと、指を素早く交互に使ったときや連打したときに押したことを取りこぼすので、
-    // タッチイベントで指ごとに受け取る。指は触れたパッドのものとし、離すまで動かしても変えない
-    /** 触れている指（Touch.identifier）と、そのパッド */
-    const touches = new Map<number, number>();
-    const touchId = (id: number) => `touch${id}`;
-    const endTouch = (id: number) => {
-      const i = touches.get(id);
-      if (i === undefined) return;
-      touches.delete(id);
-      release(i, touchId(id));
-    };
-    /** 終わりを受け取りそこねた指を離したことにする */
-    const sweep = (e: TouchEvent) => {
-      const alive = new Set([...e.touches].map((t) => t.identifier));
-      for (const id of [...touches.keys()]) if (!alive.has(id)) endTouch(id);
-    };
-    // iOS Safari は touch-action だけでは素早い 2 回のタップを拡大と見なすことがあるので、既定の動作も止める。
-    // パッドの間のすき間も含める
-    el.addEventListener("touchstart", (e) => {
-      if (prevent) e.preventDefault();
-      sweep(e);
-      for (const t of e.changedTouches) {
-        const i = pads.findIndex((pad) => pad.contains(t.target as Node));
-        if (i < 0) continue;
-        // 同じ番号の指が残っていれば（終わりを受け取りそこね、番号が使い回された）、先に離したことにする
-        endTouch(t.identifier);
-        touches.set(t.identifier, i);
-        press(i, touchId(t.identifier));
-      }
-    }, { passive: !prevent });
-    for (const type of ["touchend", "touchcancel"] as const) {
-      el.addEventListener(type, (e) => {
-        if (prevent) e.preventDefault();
-        for (const t of e.changedTouches) endTouch(t.identifier);
-        sweep(e);
-      }, { passive: !prevent });
+  // タッチ。iOS Safari ではポインターイベントだと、指を素早く交互に使ったときや連打したときに押したことを取りこぼすので、
+  // タッチイベントで指ごとに受け取る。指は触れたパッドのものとし、離すまで動かしても変えない
+  /** 触れている指（Touch.identifier）と、そのパッド */
+  const touches = new Map<number, number>();
+  const touchId = (id: number) => `touch${id}`;
+  const endTouch = (id: number) => {
+    const i = touches.get(id);
+    if (i === undefined) return;
+    touches.delete(id);
+    release(i, touchId(id));
+  };
+  /** 終わりを受け取りそこねた指を離したことにする */
+  const sweep = (e: TouchEvent) => {
+    const alive = new Set([...e.touches].map((t) => t.identifier));
+    for (const id of [...touches.keys()]) if (!alive.has(id)) endTouch(id);
+  };
+  // iOS Safari は touch-action だけでは素早い 2 回のタップを拡大と見なすことがあるので、既定の動作も止める。
+  // パッドの間のすき間も含める
+  el.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    sweep(e);
+    for (const t of e.changedTouches) {
+      const i = pads.findIndex((pad) => pad.contains(t.target as Node));
+      if (i < 0) continue;
+      // 同じ番号の指が残っていれば（終わりを受け取りそこね、番号が使い回された）、先に離したことにする
+      endTouch(t.identifier);
+      touches.set(t.identifier, i);
+      press(i, touchId(t.identifier));
     }
+  }, { passive: false });
+  for (const type of ["touchend", "touchcancel"] as const) {
+    el.addEventListener(type, (e) => {
+      e.preventDefault();
+      for (const t of e.changedTouches) endTouch(t.identifier);
+      sweep(e);
+    }, { passive: false });
   }
 
   return {
