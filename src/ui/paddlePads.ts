@@ -139,8 +139,13 @@ function touchPads(specs: PadSpec[]): TouchPads {
   document.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", releaseAll);
 
+  const el = h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads);
+  // iOS Safari は touch-action だけでは素早い 2 回のタップを拡大と見なすことがあるので、タッチの既定の動作を止める。
+  // パッドの間のすき間も含める（ポインターイベントは止まらない）
+  el.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+
   return {
-    el: h("div", { class: `paddle-pads${specs.length === 1 ? " single" : ""}` }, ...pads),
+    el,
     key(e: KeyboardEvent): boolean {
       const i = keys.get(e.key);
       if (i === undefined) return false;

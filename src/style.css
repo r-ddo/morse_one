@@ -927,6 +927,7 @@ svg.chart {
   gap: 10px;
   padding: 8px 0 max(8px, env(safe-area-inset-bottom));
   background: var(--bg);
+  touch-action: none;
 }
 
 .paddle-pads.single {
