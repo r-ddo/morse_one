@@ -5,7 +5,7 @@ import type { MicProcessing } from "../audio/mic";
 import { VirtualPaddle, VirtualStraightKey } from "../audio/paddle";
 import type { Settings } from "../storage/settings";
 import type { ScreenContext } from "./context";
-import { h, prettyCode } from "./dom";
+import { h, prettyCode, setText } from "./dom";
 import { field, range, select } from "./form";
 import { INPUT_OPTIONS, PAD_TOUCH_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
 import { touchLog } from "./touchLog";
@@ -431,10 +431,6 @@ class LabSession {
           : `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。伸びは補正しないので、短点が長く符号内の間が短ければ送り方の癖`),
     );
   }
-}
-
-function setText(el: HTMLElement, text: string): void {
-  if (el.textContent !== text) el.textContent = text;
 }
 
 /** キャンバスを表示サイズに合わせ、描画用のコンテキストと色を返す */

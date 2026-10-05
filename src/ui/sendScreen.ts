@@ -9,7 +9,7 @@ import { replayIntervals, type SendResult, type SentChar, type Spread } from "..
 import { sendCharStats, sendConfusions, sendErrorRate, sendWeights, weakSendChars } from "../training/sendWeak";
 import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
-import { h, prettyCode } from "./dom";
+import { h, prettyCode, setClass, setText } from "./dom";
 import { field, select } from "./form";
 import { touchLog, type TouchLog } from "./touchLog";
 import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad, type TouchPads } from "./paddlePads";
@@ -316,13 +316,14 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
         lastWpm = l.decoder.wpm;
       }
       const locked = session.phase === "warmup" ? "" : "（固定）";
-      speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
+      setText(speed, `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`);
     } else if (via === "paddle") {
-      speed.textContent = `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`;
+      setText(speed, `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`);
     } else {
-      speed.textContent = `画面の縦振電鍵・推定 ${l.decoder.wpm.toFixed(1)} WPM`;
+      setText(speed, `画面の縦振電鍵・推定 ${l.decoder.wpm.toFixed(1)} WPM`);
     }
-    pending.textContent = prettyCode(l.decoder.pendingCode);
+    // 表示は値が変わったときだけ書き換える（毎フレームの書き換えが、iPhone で 2 本目の指のタッチが届かない原因と疑っている）
+    setText(pending, prettyCode(l.decoder.pendingCode));
     if (mode.kind === "mock") renderClock(clock, session, mode, l.now);
     if (session.phase !== lastPhase) {
       lastPhase = session.phase;
@@ -339,7 +340,16 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       dirty = false;
       const pos = session.position;
       progress.textContent = `${Math.min(session.groups.length, Math.floor(pos / 5) + 1)} / ${session.groups.length} 組`;
-      grid.replaceChildren(...groupBlocks(session.groups, session.chars.length > 0 ? session.result : null, pos));
+      // 変わった組だけ差し替える
+      const blocks = groupBlocks(session.groups, session.chars.length > 0 ? session.result : null, pos);
+      if (grid.children.length !== blocks.length) {
+        grid.replaceChildren(...blocks);
+      } else {
+        blocks.forEach((b, i) => {
+          const old = grid.children[i];
+          if (old.innerHTML !== b.innerHTML) old.replaceWith(b);
+        });
+      }
       // 今送っている組が見えるようにする
       const group = Math.floor(pos / 5);
       if (group !== shownGroup) {
@@ -382,14 +392,14 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
 function renderClock(el: HTMLElement, session: SendSession, mode: { cpm: number; minutes: number }, now: number): void {
   const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
   if (session.phase !== "sending") {
-    el.textContent = `制限 ${mmss(mode.minutes * 60)}・目標 ${mode.cpm} 字/分。最初の文字から計時します`;
-    el.className = "send-clock";
+    setText(el, `制限 ${mmss(mode.minutes * 60)}・目標 ${mode.cpm} 字/分。最初の文字から計時します`);
+    setClass(el, "send-clock");
     return;
   }
   const elapsed = session.elapsed(now);
   const ahead = Math.round(session.sentCount - (elapsed * mode.cpm) / 60);
-  el.textContent = `${mmss(elapsed)} / ${mmss(mode.minutes * 60)}・目標より ${ahead >= 0 ? `${ahead} 字早い` : `${-ahead} 字遅い`}`;
-  el.className = `send-clock ${ahead >= 0 ? "ahead" : "behind"}`;
+  setText(el, `${mmss(elapsed)} / ${mmss(mode.minutes * 60)}・目標より ${ahead >= 0 ? `${ahead} 字早い` : `${-ahead} 字遅い`}`);
+  setClass(el, `send-clock ${ahead >= 0 ? "ahead" : "behind"}`);
 }
 
 /** お題と送信を組ごとに並べる。pos はお題のうち今送っている位置 */

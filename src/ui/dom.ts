@@ -25,3 +25,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 export function prettyCode(code: string | undefined): string {
   return (code ?? "").replaceAll(".", "·").replaceAll("-", "−");
 }
+
+/** 文字が変わったときだけ書き換える。同じ値でも書き換えると、毎回レイアウトをやり直すことになる */
+export function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+/** クラスが変わったときだけ書き換える */
+export function setClass(el: HTMLElement, className: string): void {
+  if (el.className !== className) el.className = className;
+}
