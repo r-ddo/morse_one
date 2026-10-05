@@ -167,6 +167,8 @@ function touchPads(specs: PadSpec[]): TouchPads {
     for (const t of e.changedTouches) {
       const i = pads.findIndex((pad) => pad.contains(t.target as Node));
       if (i < 0) continue;
+      // 同じ番号の指が残っていれば（終わりを受け取りそこね、番号が使い回された）、先に離したことにする
+      endTouch(t.identifier);
       touches.set(t.identifier, i);
       press(i, touchId(t.identifier));
     }
