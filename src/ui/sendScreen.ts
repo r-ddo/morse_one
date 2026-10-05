@@ -1,6 +1,6 @@
 import type { DecodeEvent, MorseDecoder } from "../audio/decoder";
 import { KeyListener } from "../audio/listener";
-import { VirtualPaddle, type Paddle } from "../audio/paddle";
+import { VirtualPaddle } from "../audio/paddle";
 import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { farnsworth } from "../audio/timing";
@@ -11,6 +11,7 @@ import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, select } from "./form";
+import { paddlePads, paddleSettingsCard } from "./paddlePads";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
@@ -65,19 +66,8 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
   focus.addEventListener("change", () => ctx.updateSettings({ sendFocusWeak: focus.checked }));
   const mockText = () => `お題 ${ctx.settings.sendMockCpm * ctx.settings.sendMockMinutes} 字`;
   const mockLength = h("div", { class: "note" }, mockText());
-  const swap = h("input", { type: "checkbox", checked: s.paddleSwap });
-  swap.addEventListener("change", () => ctx.updateSettings({ paddleSwap: swap.checked }));
-  const paddleSettings = h("div", { class: "settings", hidden: s.sendInput !== "paddle" },
-    field("パドルの速度", select(
-      [10, 12, 14, 16, 18, 20, 22, 25, 28, 30].map((v) => [String(v), `${v} WPM`]),
-      String(s.paddleWpm),
-      (v) => ctx.updateSettings({ paddleWpm: Number(v) }),
-    )),
-    h("label", { class: "check" }, swap, h("span", {}, "左右を入れ替える（既定は左が短点）")),
-    h("p", { class: "note" },
-      "スクイーズ式（iambic B）のエレキーです。画面下の左右のパッドを人差し指と中指で押します。" +
-      "パソコンではキーボードの ↓（左のパッド）と →（右のパッド）でも操作できます"),
-  );
+  const paddleSettings = paddleSettingsCard(ctx);
+  paddleSettings.hidden = s.sendInput !== "paddle";
   const startLabel = () => (ctx.settings.sendInput === "paddle" ? "はじめる" : "マイクを開始");
   const startBtn = h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, startLabel());
   ctx.render(
@@ -332,74 +322,6 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     void saveSend(record).catch((e) => console.error("failed to save send", e));
     showSendResult(ctx, session, record, mode);
   }
-}
-
-/**
- * 画面のパドル。左右のパッドをタッチ（複数の指を同時に）で押し、キーボードでは ↓ が左・→ が右。
- * 既定は左が短点・右が長点で、swap なら入れ替える
- */
-function paddlePads(paddle: VirtualPaddle, swap: boolean) {
-  const sides: [Paddle, Paddle] = swap ? ["dash", "dot"] : ["dot", "dash"];
-  const keys: Record<string, 0 | 1> = { ArrowDown: 0, ArrowRight: 1 };
-  /** パッドごとに押している指（ポインター）とキー */
-  const pressing = [new Set<number | string>(), new Set<number | string>()];
-  const press = (i: 0 | 1, who: number | string) => {
-    const set = pressing[i];
-    if (set.has(who)) return;
-    set.add(who);
-    if (set.size === 1) {
-      pads[i].classList.add("pressed");
-      paddle.press(sides[i]);
-    }
-  };
-  const release = (i: 0 | 1, who: number | string) => {
-    const set = pressing[i];
-    if (!set.delete(who) || set.size > 0) return;
-    pads[i].classList.remove("pressed");
-    paddle.release(sides[i]);
-  };
-  const releaseAll = () => {
-    for (const i of [0, 1] as const) for (const who of [...pressing[i]]) release(i, who);
-  };
-
-  const pads = ([0, 1] as const).map((i) => {
-    const pad = h("div", { class: "paddle-pad" },
-      h("span", { class: "paddle-code" }, sides[i] === "dot" ? "·" : "−"),
-      h("span", { class: "paddle-key" }, i === 0 ? "↓" : "→"));
-    pad.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      // 指を少し動かしても離したことにならないよう、ポインターを捕まえておく
-      pad.setPointerCapture(e.pointerId);
-      press(i, e.pointerId);
-    });
-    for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
-      pad.addEventListener(type, (e) => release(i, e.pointerId));
-    }
-    pad.addEventListener("contextmenu", (e) => e.preventDefault());
-    return pad;
-  });
-
-  const onKeyUp = (e: KeyboardEvent) => {
-    const i = keys[e.key];
-    if (i !== undefined) release(i, e.key);
-  };
-  document.addEventListener("keyup", onKeyUp);
-  window.addEventListener("blur", releaseAll);
-
-  return {
-    el: h("div", { class: "paddle-pads" }, ...pads),
-    /** キーを押したとき。パドルのキーなら true */
-    key(e: KeyboardEvent): boolean {
-      const i = keys[e.key];
-      if (i === undefined) return false;
-      if (!e.repeat) press(i, e.key);
-      return true;
-    },
-    detach(): void {
-      document.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", releaseAll);
-    },
-  };
 }
 
 /** 模擬試験の経過時間と、目標の速度に対して何字進んでいるか（遅れているか） */

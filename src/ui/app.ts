@@ -95,7 +95,7 @@ export class App {
         h("button", { type: "button", onclick: () => this.showContrastMenu() }, "聞き分け練習"),
         h("button", { type: "button", onclick: () => void showStats(this.ctx) }, "成績"),
       ),
-      h("button", { type: "button", onclick: () => showLab(this.ctx) }, "送信実験（マイク入力）"),
+      h("button", { type: "button", onclick: () => showLab(this.ctx) }, "送信実験"),
     );
   }
 

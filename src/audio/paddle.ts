@@ -101,7 +101,7 @@ export interface PaddleOptions {
  * キーの上げ下げをそのまま復号する（時刻は AudioContext の currentTime、秒）
  */
 export class VirtualPaddle {
-  readonly decoder: MorseDecoder;
+  decoder: MorseDecoder;
   private readonly keyer: IambicKeyer;
   private readonly ctx: AudioContext;
   private readonly osc: OscillatorNode;
@@ -127,9 +127,7 @@ export class VirtualPaddle {
     this.osc.connect(this.gain).connect(this.ctx.destination);
     this.osc.start();
 
-    this.decoder = new MorseDecoder(opts.wpm);
-    // 符号の長さはエレキーが正確に作るので、速度は推定しない
-    this.decoder.speedLocked = true;
+    this.decoder = this.newDecoder();
     this.keyer = new IambicKeyer(1.2 / opts.wpm, (down, t) => this.key(down, t));
     this.timer = setInterval(() => this.step(), STEP_MS);
   }
@@ -158,10 +156,22 @@ export class VirtualPaddle {
     this.flush();
   }
 
+  /** 復号をやり直す */
+  resetDecoder(): void {
+    this.decoder = this.newDecoder();
+  }
+
   close(): void {
     clearInterval(this.timer);
     this.osc.stop();
     void this.ctx.close().catch(() => {});
+  }
+
+  private newDecoder(): MorseDecoder {
+    const decoder = new MorseDecoder(this.opts.wpm);
+    // 符号の長さはエレキーが正確に作るので、速度は推定しない
+    decoder.speedLocked = true;
+    return decoder;
   }
 
   private step(): void {

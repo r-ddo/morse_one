@@ -2,9 +2,11 @@ import type { DecodeEvent, GapKind } from "../audio/decoder";
 import type { DetectorFrame } from "../audio/keying";
 import { FREQ_MAX, FREQ_MIN, KeyListener } from "../audio/listener";
 import type { MicProcessing } from "../audio/mic";
+import { VirtualPaddle } from "../audio/paddle";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
-import { range } from "./form";
+import { field, range, select } from "./form";
+import { paddlePads, paddleSettingsCard } from "./paddlePads";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
@@ -42,14 +44,43 @@ interface LabView {
   freqValue: HTMLElement;
 }
 
-/** 送信実験: 練習機などのサイドトーンをマイクから入力し、トーンのオン/オフと符号を検出する */
+/**
+ * 送信実験: 練習機などのサイドトーンをマイクから入力し、トーンのオン/オフと符号を検出する。
+ * 画面のパドルを選ぶと、パドルで送った符号を復号する（符号の長さや間の確認用）
+ */
 export function showLab(ctx: ScreenContext): void {
-  // 再生用の AudioContext とマイク用が同時に動かないようにする
+  // 再生用の AudioContext とマイク用（パドルのサイドトーン用）が同時に動かないようにする
   ctx.player.release();
   let session: LabSession | null = null;
   let starting = false;
+  const usePaddle = ctx.settings.sendInput === "paddle";
 
-  const startBtn = h("button", { type: "button", class: "primary", onclick: () => void toggle() }, "マイクを開始");
+  /** 入力やパドルの設定を変えたら、止めて画面を作り直す */
+  const rebuild = () => {
+    stop();
+    pads?.detach();
+    showLab(ctx);
+  };
+  const inputSelect = field("入力", select(
+    [["mic", "練習機の音（マイク）"], ["paddle", "画面のパドル"]],
+    ctx.settings.sendInput,
+    (v) => {
+      ctx.updateSettings({ sendInput: v as "mic" | "paddle" });
+      rebuild();
+    },
+  ));
+  // パドルは最初に押したときに始める（そのタップの中で音を出せるようにする）
+  const pads = usePaddle
+    ? paddlePads({
+      press: (p) => {
+        session ??= LabSession.paddle(ctx, view);
+        session.paddle?.press(p);
+      },
+      release: (p) => session?.paddle?.release(p),
+    }, ctx.settings.paddleSwap)
+    : null;
+
+  const startBtn = h("button", { type: "button", class: "primary", hidden: usePaddle, onclick: () => void toggle() }, "マイクを開始");
   const info = h("div", { class: "lab-info" }, "開始すると、実際に適用された設定をここに表示します");
 
   const checks = PROCESSING_LABELS.map(([key, label]) => {
@@ -95,29 +126,35 @@ export function showLab(ctx: ScreenContext): void {
   const tile = (label: string, value: HTMLElement) => h("div", {}, h("div", { class: "tile-label" }, label), value);
 
   ctx.render(
-    h("h1", {}, "送信実験（マイク入力）"),
-    h("p", { class: "note" },
-      "練習機のサイドトーンをマイクから入力して、トーンのオン/オフと符号を検出します。" +
-      "内蔵マイクでスピーカーの音を拾っても、有線でつないでもかまいません"),
+    h("h1", {}, "送信実験"),
+    h("p", { class: "note" }, usePaddle
+      ? "画面のパドルで送った符号を復号し、符号と間の長さを表示します。パッドを押すと始まります"
+      : "練習機のサイドトーンをマイクから入力して、トーンのオン/オフと符号を検出します。" +
+        "内蔵マイクでスピーカーの音を拾っても、有線でつないでもかまいません"),
+    h("div", { class: "settings" }, inputSelect),
+    usePaddle && paddleSettingsCard(ctx, rebuild),
     startBtn,
-    h("div", { class: "settings" },
+    !usePaddle && h("div", { class: "settings" },
       h("h2", {}, "ブラウザの音声処理（オフ推奨）"),
       ...checks,
       info,
     ),
-    h("div", { class: "chart-card lab-monitor" },
-      h("div", { class: "lab-tiles" }, view.lamp, tile("推定速度", view.wpm), tile("周波数", view.freq), tile("入力レベル", view.level)),
-      view.envelope,
-      h("p", { class: "note" }, `目的の周波数の強さ（直近 ${HISTORY_SEC} 秒）。塗りがキーを下げていると判定した区間、点線が閾値`),
-      view.rate,
-      view.spectrum,
-      h("p", { class: "note" }, "スペクトル（0〜2000 Hz）。縦線が検出に使っている周波数"),
-      h("div", { class: "field" },
-        h("label", { class: "check" }, autoInput, h("span", {}, "周波数を自動検出")),
-        freqRange,
+    usePaddle
+      ? h("div", { class: "chart-card lab-monitor" },
+        h("div", { class: "lab-tiles" }, view.lamp, tile("速度", view.wpm)))
+      : h("div", { class: "chart-card lab-monitor" },
+        h("div", { class: "lab-tiles" }, view.lamp, tile("推定速度", view.wpm), tile("周波数", view.freq), tile("入力レベル", view.level)),
+        view.envelope,
+        h("p", { class: "note" }, `目的の周波数の強さ（直近 ${HISTORY_SEC} 秒）。塗りがキーを下げていると判定した区間、点線が閾値`),
+        view.rate,
+        view.spectrum,
+        h("p", { class: "note" }, "スペクトル（0〜2000 Hz）。縦線が検出に使っている周波数"),
+        h("div", { class: "field" },
+          h("label", { class: "check" }, autoInput, h("span", {}, "周波数を自動検出")),
+          freqRange,
+        ),
+        h("label", { class: "check" }, speedInput, h("span", {}, "速度を今の推定で固定")),
       ),
-      h("label", { class: "check" }, speedInput, h("span", {}, "速度を今の推定で固定")),
-    ),
     h("div", { class: "chart-card" },
       h("div", { class: "chart-head" },
         h("h2", {}, "復元した文字"),
@@ -127,16 +164,23 @@ export function showLab(ctx: ScreenContext): void {
       view.stats,
     ),
     h("button", { type: "button", onclick: () => ctx.stopDrill() }, "ホーム"),
+    pads?.el ?? null,
   );
 
-  ctx.setActive({ key: () => false, abort: () => stop() });
+  ctx.setActive({
+    key: (e) => pads?.key(e) ?? false,
+    abort: () => {
+      stop();
+      pads?.detach();
+    },
+  });
 
   async function start(): Promise<void> {
     if (starting) return;
     starting = true;
     startBtn.disabled = true;
     try {
-      session = await LabSession.start(view, () => {
+      session = await LabSession.mic(view, () => {
         stop();
         showBanner("マイクが止められました");
       });
@@ -177,14 +221,23 @@ class LabSession {
   private releaseScreen: () => void = () => {};
 
   private constructor(
-    private readonly listener: KeyListener,
+    private readonly input: KeyListener | VirtualPaddle,
     private readonly view: LabView,
   ) {
     void keepScreenOn().then((release) => (this.releaseScreen = release));
     this.raf = requestAnimationFrame(this.draw);
   }
 
-  static async start(view: LabView, onEnded: () => void): Promise<LabSession> {
+  /** ユーザー操作のハンドラ内で呼ぶこと */
+  static paddle(ctx: ScreenContext, view: LabView): LabSession {
+    let session: LabSession | null = null;
+    const { paddleWpm, freq, volume } = ctx.settings;
+    const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, (events) => session?.apply(events));
+    session = new LabSession(paddle, view);
+    return session;
+  }
+
+  static async mic(view: LabView, onEnded: () => void): Promise<LabSession> {
     let session: LabSession | null = null;
     const listener = await KeyListener.open(
       { processing: options.processing, freq: options.freq, autoFreq: options.autoFreq },
@@ -200,28 +253,39 @@ class LabSession {
     return session;
   }
 
+  /** 画面のパドルのときはそのパドル */
+  get paddle(): VirtualPaddle | null {
+    return this.input instanceof VirtualPaddle ? this.input : null;
+  }
+
+  /** マイクのときはその入力 */
+  private get listener(): KeyListener | null {
+    return this.input instanceof KeyListener ? this.input : null;
+  }
+
   close(): void {
     cancelAnimationFrame(this.raf);
     this.releaseScreen();
-    this.listener.close();
+    this.input.close();
     this.view.lamp.classList.remove("on");
   }
 
   setFreq(freq: number): void {
+    if (!this.listener) return;
     this.listener.autoFreq = false;
     this.listener.setFreq(freq);
   }
 
   setAutoFreq(auto: boolean): void {
-    this.listener.autoFreq = auto;
+    if (this.listener) this.listener.autoFreq = auto;
   }
 
   setSpeedLocked(locked: boolean): void {
-    this.listener.decoder.speedLocked = locked;
+    if (this.listener) this.listener.decoder.speedLocked = locked;
   }
 
   clear(): void {
-    this.listener.resetDecoder();
+    this.input.resetDecoder();
     this.text = "";
     this.marks = [];
     this.gaps = [];
@@ -229,7 +293,7 @@ class LabSession {
 
   /** 要求した音声処理と、実際に適用された設定 */
   describe(): HTMLElement {
-    const { mic } = this.listener;
+    const { mic } = this.listener!;
     const track = mic.track;
     const settings = track.getSettings() as Partial<Record<keyof MicProcessing, boolean>> & MediaTrackSettings;
     const supported = navigator.mediaDevices.getSupportedConstraints() as Partial<Record<keyof MicProcessing, boolean>>;
@@ -248,7 +312,7 @@ class LabSession {
 
   private addFrames(frames: DetectorFrame[]): void {
     this.frames.push(...frames);
-    const now = this.listener.now;
+    const now = this.input.now;
     if (this.frames[0].t < now - 2 * HISTORY_SEC) this.frames = this.frames.filter((f) => f.t >= now - HISTORY_SEC);
   }
 
@@ -276,11 +340,16 @@ class LabSession {
 
   private readonly draw = (): void => {
     this.raf = requestAnimationFrame(this.draw);
-    const { view, listener } = this;
-    const { detector } = listener;
+    const { view, input, listener } = this;
 
-    view.lamp.classList.toggle("on", detector.keyDown);
-    setText(view.wpm, this.marks.length > 0 ? `${listener.decoder.wpm.toFixed(1)} WPM` : "―");
+    view.lamp.classList.toggle("on", input.keyDown);
+    setText(view.wpm, this.marks.length > 0 || !listener ? `${input.decoder.wpm.toFixed(1)} WPM` : "―");
+    setText(view.text, this.text);
+    setText(view.pending, prettyCode(input.decoder.pendingCode));
+    this.renderStats();
+    if (!listener) return;
+
+    const { detector } = listener;
     setText(view.freq, `${Math.round(detector.freq)} Hz`);
     setText(view.level, Number.isFinite(listener.rmsDb) ? `${Math.round(listener.rmsDb)} dBFS` : "―");
     const rate = listener.measuredRate;
@@ -290,10 +359,6 @@ class LabSession {
       view.freqInput.value = String(Math.round(detector.freq));
       setText(view.freqValue, `${Math.round(detector.freq)} Hz`);
     }
-    setText(view.text, this.text);
-    setText(view.pending, prettyCode(listener.decoder.pendingCode));
-    this.renderStats();
-
     drawEnvelope(view.envelope, this.frames, listener.now);
     drawSpectrum(view.spectrum, listener.lastSpectrum, listener.binHz, detector.freq);
   };
@@ -311,7 +376,7 @@ class LabSession {
       ["文字間", of(gaps, "char"), "3"],
       ["語間", of(gaps, "word"), "7"],
     ];
-    const { dot, bias } = this.listener.decoder;
+    const { dot, bias } = this.input.decoder;
     const stretch = (bias / dot).toFixed(2);
     const key = rows.map(([, xs]) => `${xs.length}:${avg(xs)}`).join("|") + `|${stretch}`;
     if (this.view.stats.dataset.key === key) return;
@@ -322,9 +387,10 @@ class LabSession {
         ...rows.map(([label, xs, std]) =>
           h("tr", {}, h("th", {}, label), h("td", {}, avg(xs)), h("td", {}, std), h("td", {}, String(xs.length)))),
       ),
-      h("p", { class: "note" },
-        `長さは推定短点長を 1 とし、残響などによる伸びを補正した値（直近 ${STATS_WINDOW} 個）。` +
-        `推定の伸び ${stretch}（符号はこれだけ長く、間は短く測れている）`),
+      h("p", { class: "note" }, this.listener
+        ? `長さは推定短点長を 1 とし、残響などによる伸びを補正した値（直近 ${STATS_WINDOW} 個）。` +
+          `推定の伸び ${stretch}（符号はこれだけ長く、間は短く測れている）`
+        : `長さは短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。符号と符号内の間はエレキーが作るので、見るのは文字間・語間`),
     );
   }
 }
