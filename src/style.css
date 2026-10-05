@@ -954,6 +954,12 @@ svg.chart {
   touch-action: none;
 }
 
+/* 既定の動作を止めない受け取り方では、ダブルタップでの拡大だけを止める */
+.paddle-pads.passive,
+.paddle-pads.passive .paddle-pad {
+  touch-action: manipulation;
+}
+
 .paddle-pads.single {
   grid-template-columns: 1fr;
 }

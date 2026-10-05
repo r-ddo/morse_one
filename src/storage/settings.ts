@@ -2,6 +2,14 @@ import type { CharsetId } from "../training/charset";
 
 export type SendInput = "mic" | "paddle" | "straight";
 
+/**
+ * 画面のパドル・縦振電鍵のタッチの受け取り方（iOS で 2 本目の指が届かない問題を調べるための実験）。
+ * touch: タッチイベントで受け取り、既定の動作（拡大など）を止める
+ * passive: タッチイベントで受け取るが、既定の動作は止めない
+ * pointer: ポインターイベントで受け取る
+ */
+export type PadTouch = "touch" | "passive" | "pointer";
+
 export interface Settings {
   charset: CharsetId;
   /** 文字速度（WPM） */
@@ -48,6 +56,8 @@ export interface Settings {
   paddleWpm: number;
   /** 画面のパドルの左右を入れ替える（既定は左が短点） */
   paddleSwap: boolean;
+  /** 画面のパドル・縦振電鍵のタッチの受け取り方 */
+  padTouch: PadTouch;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -75,6 +85,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sendInput: "mic",
   paddleWpm: 20,
   paddleSwap: false,
+  padTouch: "touch",
 };
 
 const KEY = "morse_one.settings";

@@ -207,7 +207,8 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   let input: SendInput | null = null;
   let pads: TouchPads | null = null;
   // タップの中で AudioContext を作る（iOS の自動再生制限のため）
-  const { paddleWpm, freq, volume, paddleSwap } = ctx.settings;
+  const { paddleWpm, freq, volume, paddleSwap, padTouch } = ctx.settings;
+  log?.add(`受け取り方 ${padTouch}`);
   if (via === "paddle") {
     const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents);
     input = paddle;
@@ -221,7 +222,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
         log?.add(`☆ ${name[p]}を離す`);
         paddle.release(p);
       },
-    }, paddleSwap);
+    }, paddleSwap, padTouch);
     // 符号の長さと速度はエレキーが決めるので、VVV で合わせる必要はない
     session.skipWarmup();
   } else if (via === "straight") {
@@ -237,7 +238,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
         log?.add("☆ 電鍵を離す");
         key.release();
       },
-    });
+    }, padTouch);
   }
 
   ctx.render(

@@ -7,7 +7,7 @@ import type { Settings } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, range, select } from "./form";
-import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
+import { INPUT_OPTIONS, PAD_TOUCH_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
 import { touchLog } from "./touchLog";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
@@ -77,6 +77,7 @@ export function showLab(ctx: ScreenContext): void {
   // 画面のパドル・縦振電鍵は最初に押したときに始める（そのタップの中で音を出せるようにする）
   const onScreenKey = () => (session ??= LabSession.onScreen(ctx, view)).input;
   const log = onScreen ? touchLog({ live: true }) : null;
+  log?.add(`受け取り方 ${ctx.settings.padTouch}`);
   const DOT_DASH = { dot: "短点", dash: "長点" } as const;
   const pads = via === "paddle"
     ? paddlePads({
@@ -88,7 +89,7 @@ export function showLab(ctx: ScreenContext): void {
         log?.add(`☆ ${DOT_DASH[p]}を離す`);
         (session?.input as VirtualPaddle | undefined)?.release(p);
       },
-    }, ctx.settings.paddleSwap)
+    }, ctx.settings.paddleSwap, ctx.settings.padTouch)
     : via === "straight"
       ? straightKeyPad({
         press: () => {
@@ -99,7 +100,7 @@ export function showLab(ctx: ScreenContext): void {
           log?.add("☆ 電鍵を離す");
           (session?.input as VirtualStraightKey | undefined)?.release();
         },
-      })
+      }, ctx.settings.padTouch)
       : null;
 
   const startBtn = h("button", { type: "button", class: "primary", hidden: onScreen, onclick: () => void toggle() }, "マイクを開始");
@@ -153,7 +154,19 @@ export function showLab(ctx: ScreenContext): void {
       ? `画面の${via === "paddle" ? "パドル" : "縦振電鍵"}で送った符号を復号し、符号と間の長さを表示します。パッドを押すと始まります`
       : "練習機のサイドトーンをマイクから入力して、トーンのオン/オフと符号を検出します。" +
         "内蔵マイクでスピーカーの音を拾っても、有線でつないでもかまいません"),
-    h("div", { class: "settings" }, inputSelect),
+    h("div", { class: "settings" },
+      inputSelect,
+      onScreen && field("タッチの受け取り方（実験）", select(
+        PAD_TOUCH_OPTIONS,
+        ctx.settings.padTouch,
+        (v) => {
+          ctx.updateSettings({ padTouch: v as Settings["padTouch"] });
+          rebuild();
+        },
+      )),
+      onScreen && h("p", { class: "note" },
+        "2 本目の指が届かない問題を調べるための切り替えです。送信練習の画面にも使われます"),
+    ),
     via === "paddle" && paddleSettingsCard(ctx, rebuild),
     via === "straight" && h("div", { class: "settings" }, straightKeyNote()),
     startBtn,
