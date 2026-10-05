@@ -11,6 +11,7 @@ import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, select } from "./form";
+import { touchLog, type TouchLog } from "./touchLog";
 import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad, type TouchPads } from "./paddlePads";
 import type { Settings } from "../storage/settings";
 import { showBanner } from "./updateBanner";
@@ -195,11 +196,14 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   let dirty = true;
   /** 画面に表示している、今送っている組 */
   let shownGroup = -1;
+  const via = ctx.settings.sendInput;
+  // 画面のパドル・縦振電鍵では、届いたタッチを記録して結果画面に出す（取りこぼしの原因を実機で調べるため）
+  const log = via === "mic" ? null : touchLog({ live: false });
   const onEvents = (events: DecodeEvent[], now: number) => {
+    if (log) for (const e of events) if (e.type === "char") log.add(`文字 ${e.char ?? prettyCode(e.code)}`);
     if (session.handle(events, now)) dirty = true;
   };
 
-  const via = ctx.settings.sendInput;
   let input: SendInput | null = null;
   let pads: TouchPads | null = null;
   // タップの中で AudioContext を作る（iOS の自動再生制限のため）
@@ -207,14 +211,33 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   if (via === "paddle") {
     const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents);
     input = paddle;
-    pads = paddlePads(paddle, paddleSwap);
+    const name = { dot: "短点", dash: "長点" } as const;
+    pads = paddlePads({
+      press: (p) => {
+        log?.add(`★ ${name[p]}を押す`);
+        paddle.press(p);
+      },
+      release: (p) => {
+        log?.add(`☆ ${name[p]}を離す`);
+        paddle.release(p);
+      },
+    }, paddleSwap);
     // 符号の長さと速度はエレキーが決めるので、VVV で合わせる必要はない
     session.skipWarmup();
   } else if (via === "straight") {
     // 速度は送り方で決まるので、VVV で推定を合わせてから始める（固定はしない）
     const key = new VirtualStraightKey({ wpm: lastStraightWpm, freq, volume }, onEvents);
     input = key;
-    pads = straightKeyPad(key);
+    pads = straightKeyPad({
+      press: () => {
+        log?.add("★ 電鍵を押す");
+        key.press();
+      },
+      release: () => {
+        log?.add("☆ 電鍵を離す");
+        key.release();
+      },
+    });
   }
 
   ctx.render(
@@ -237,6 +260,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     cancelAnimationFrame(raf);
     releaseScreen();
     pads?.detach();
+    log?.detach();
     input?.close();
     input = null;
   };
@@ -265,8 +289,12 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   }
   void keepScreenOn().then((release) => (releaseScreen = release));
 
-  const draw = () => {
+  /** 前の描画の時刻。画面の更新が止まっていた（タッチの処理も遅れる）ことを記録する */
+  let lastFrame: number | null = null;
+  const draw = (frameAt: number) => {
     raf = requestAnimationFrame(draw);
+    if (log && lastFrame !== null && frameAt - lastFrame > 50) log.add(`画面の更新が ${Math.round(frameAt - lastFrame)} ms 止まった`);
+    lastFrame = frameAt;
     const l = input;
     if (!l) return;
     if (session.timeUp(l.now)) {
@@ -345,7 +373,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     );
     records = [record, ...records];
     void saveSend(record).catch((e) => console.error("failed to save send", e));
-    showSendResult(ctx, session, record, mode);
+    showSendResult(ctx, session, record, mode, log);
   }
 }
 
@@ -383,7 +411,7 @@ function groupBlocks(groups: readonly string[], result: SendResult | null, pos: 
     ));
 }
 
-function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRecord, mode: SendMode): void {
+function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRecord, mode: SendMode, log?: TouchLog | null): void {
   const { score, quality } = session.result;
   const chars = session.target.length;
   const breakdown: [string, number, string][] = [
@@ -443,6 +471,7 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
       h("button", { type: "button", onclick: () => (replay.stop(), void showSendMenu(ctx)) }, "送信練習メニュー"),
     ),
     h("button", { type: "button", onclick: () => (replay.stop(), ctx.showHome()) }, "ホーム"),
+    log?.el ?? null,
   );
 }
 

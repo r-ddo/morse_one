@@ -8,6 +8,7 @@ import type { ScreenContext } from "./context";
 import { h, prettyCode } from "./dom";
 import { field, range, select } from "./form";
 import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
+import { touchLog } from "./touchLog";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
 
@@ -75,7 +76,7 @@ export function showLab(ctx: ScreenContext): void {
   ));
   // 画面のパドル・縦振電鍵は最初に押したときに始める（そのタップの中で音を出せるようにする）
   const onScreenKey = () => (session ??= LabSession.onScreen(ctx, view)).input;
-  const log = onScreen ? touchLog() : null;
+  const log = onScreen ? touchLog({ live: true }) : null;
   const DOT_DASH = { dot: "短点", dash: "長点" } as const;
   const pads = via === "paddle"
     ? paddlePads({
@@ -417,77 +418,6 @@ class LabSession {
           : `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。伸びは補正しないので、短点が長く符号内の間が短ければ送り方の癖`),
     );
   }
-}
-
-/** 記録するイベント。iOS 独自の gesture* は 2 本指の操作（拡大など）の始まりと終わり */
-const LOGGED_EVENTS = [
-  "touchstart", "touchend", "touchcancel",
-  "pointerdown", "pointerup", "pointercancel",
-  "gesturestart", "gestureend", "dblclick",
-] as const;
-
-/**
- * 画面のパドル・縦振電鍵が押したことを取りこぼす原因を実機で調べるための、届いたタッチの記録。
- * 文書全体で（パッドより先に）受け取り、触れた場所（左・右のパッドかそれ以外）と時刻（ミリ秒）を残す
- */
-function touchLog(): { el: HTMLElement; add(text: string): void; detach(): void } {
-  const MAX = 60;
-  const lines: string[] = [];
-  const pre = h("pre", { class: "touch-log" }, "パッドを押すと、ここに届いたイベントを表示します");
-  let t0: number | null = null;
-  let raf = 0;
-
-  const where = (target: EventTarget | null): string => {
-    if (!(target instanceof Element)) return "?";
-    const pad = target.closest(".paddle-pad");
-    if (!pad) return target === document.documentElement || target === document.body ? "外" : `外(${target.className || target.tagName.toLowerCase()})`;
-    const all = [...pad.parentElement!.children];
-    return all.length === 1 ? "パッド" : all.indexOf(pad) === 0 ? "左" : "右";
-  };
-  const add = (text: string) => {
-    const now = performance.now();
-    t0 ??= now;
-    lines.unshift(`${String(Math.round(now - t0)).padStart(6)} ${text}`);
-    if (lines.length > MAX) lines.length = MAX;
-    if (!raf) raf = requestAnimationFrame(() => {
-      raf = 0;
-      pre.textContent = lines.join("\n");
-    });
-  };
-  const onEvent = (e: Event) => {
-    if (e instanceof TouchEvent) {
-      const changed = [...e.changedTouches].map((t) => `#${t.identifier % 1000}${where(t.target)}`).join(" ");
-      add(`${e.type} ${changed}（触れている指 ${e.touches.length}）`);
-    } else if (e instanceof PointerEvent) {
-      add(`${e.type} ${e.pointerType} #${e.pointerId % 1000}${where(e.target)}`);
-    } else {
-      add(`${e.type} ${where(e.target)}`);
-    }
-  };
-  for (const type of LOGGED_EVENTS) document.addEventListener(type, onEvent, { capture: true, passive: true });
-
-  const clear = () => {
-    lines.length = 0;
-    t0 = null;
-    pre.textContent = "";
-  };
-  return {
-    el: h("div", { class: "chart-card" },
-      h("div", { class: "chart-head" },
-        h("h2", {}, "タッチの記録（新しい順）"),
-        h("button", { type: "button", class: "small", onclick: clear }, "消す"),
-      ),
-      h("p", { class: "note" },
-        "左端は最初のイベントからのミリ秒。★☆ はアプリがパドル（電鍵）を押した・離したとき。" +
-        "反応しなかったときにここをスクリーンショットで送ってください"),
-      pre,
-    ),
-    add,
-    detach(): void {
-      cancelAnimationFrame(raf);
-      for (const type of LOGGED_EVENTS) document.removeEventListener(type, onEvent, { capture: true });
-    },
-  };
 }
 
 function setText(el: HTMLElement, text: string): void {
