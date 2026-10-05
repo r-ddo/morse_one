@@ -88,7 +88,7 @@ export class App {
       h("button", { class: "primary", type: "button", onclick: () => void this.startGroupDrill() }, "5文字グループをはじめる"),
       h("button", { class: "primary", type: "button", onclick: () => showStreamMenu(this.ctx) }, "遅れ受信"),
       h("button", { class: "primary", type: "button", onclick: () => void showMockMenu(this.ctx) }, "模擬試験（紙に書き取り）"),
-      h("button", { class: "primary", type: "button", onclick: () => void showSendMenu(this.ctx) }, "送信練習（練習機をマイクで）"),
+      h("button", { class: "primary", type: "button", onclick: () => void showSendMenu(this.ctx) }, "送信練習"),
       this.settingsForm(),
       h("div", { class: "row" },
         h("button", { type: "button", onclick: () => void this.testTone() }, "試聴"),

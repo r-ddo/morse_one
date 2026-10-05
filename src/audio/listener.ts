@@ -72,6 +72,10 @@ export class KeyListener {
     return this.detector.time;
   }
 
+  get keyDown(): boolean {
+    return this.detector.keyDown;
+  }
+
   get binHz(): number {
     return this.mic.ctx.sampleRate / this.mic.analyser.fftSize;
   }

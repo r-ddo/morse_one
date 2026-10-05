@@ -40,6 +40,12 @@ export interface Settings {
   sendMockMinutes: number;
   /** グループ送信で、送信の苦手な文字を多めに出すか */
   sendFocusWeak: boolean;
+  /** 送信練習の入力。練習機の音をマイクで拾うか、画面（キーボード）のパドルを使うか */
+  sendInput: "mic" | "paddle";
+  /** 画面のパドルの速度（WPM） */
+  paddleWpm: number;
+  /** 画面のパドルの左右を入れ替える（既定は左が短点） */
+  paddleSwap: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -64,6 +70,9 @@ export const DEFAULT_SETTINGS: Settings = {
   sendMockCpm: 80,
   sendMockMinutes: 5,
   sendFocusWeak: true,
+  sendInput: "mic",
+  paddleWpm: 20,
+  paddleSwap: false,
 };
 
 const KEY = "morse_one.settings";

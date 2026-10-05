@@ -173,6 +173,8 @@ export interface SendRecord {
   marks?: string;
   /** お題の各文字に対応した送信（対応がなければ null）。古い記録にはない */
   sentAt?: (string | null)[];
+  /** 入力（練習機の音か画面のパドルか）。古い記録にはなく、練習機の音 */
+  input?: "mic" | "paddle";
 }
 
 export async function saveSend(record: SendRecord): Promise<void> {

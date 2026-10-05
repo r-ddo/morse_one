@@ -128,6 +128,7 @@ export class SendSession {
     wpm: number;
     minutes?: number;
     targetCpm?: number;
+    input?: SendRecord["input"];
     ts?: number;
   }): SendRecord {
     const { score, quality } = this.result;
@@ -156,6 +157,7 @@ export class SendSession {
       wordGapCv: quality.wordGap?.cv ?? null,
       ...(fields.minutes !== undefined ? { minutes: fields.minutes } : {}),
       ...(fields.targetCpm !== undefined ? { targetCpm: fields.targetCpm } : {}),
+      ...(fields.input === "paddle" ? { input: fields.input } : {}),
       marks: markString(score),
       sentAt: score.sentAt,
     };

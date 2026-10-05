@@ -1,4 +1,6 @@
+import type { DecodeEvent, MorseDecoder } from "../audio/decoder";
 import { KeyListener } from "../audio/listener";
+import { VirtualPaddle, type Paddle } from "../audio/paddle";
 import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { farnsworth } from "../audio/timing";
@@ -33,6 +35,15 @@ type SendMode = { kind: "group" } | { kind: "mock"; cpm: number; minutes: number
 let lastFreq = 700;
 let lastWpm = 20;
 
+/** 送信の入力（練習機の音を拾うマイクか、画面のパドル）に共通の部分 */
+interface SendInput {
+  /** 入力の時刻（秒） */
+  readonly now: number;
+  readonly keyDown: boolean;
+  readonly decoder: MorseDecoder;
+  close(): void;
+}
+
 const STATUS: Record<SendPhase, string> = {
   warmup: "まず VVV を送ってください（周波数と速度を合わせて固定します）",
   ready: "準備できました。お題を送ってください",
@@ -54,11 +65,38 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
   focus.addEventListener("change", () => ctx.updateSettings({ sendFocusWeak: focus.checked }));
   const mockText = () => `お題 ${ctx.settings.sendMockCpm * ctx.settings.sendMockMinutes} 字`;
   const mockLength = h("div", { class: "note" }, mockText());
+  const swap = h("input", { type: "checkbox", checked: s.paddleSwap });
+  swap.addEventListener("change", () => ctx.updateSettings({ paddleSwap: swap.checked }));
+  const paddleSettings = h("div", { class: "settings", hidden: s.sendInput !== "paddle" },
+    field("パドルの速度", select(
+      [10, 12, 14, 16, 18, 20, 22, 25, 28, 30].map((v) => [String(v), `${v} WPM`]),
+      String(s.paddleWpm),
+      (v) => ctx.updateSettings({ paddleWpm: Number(v) }),
+    )),
+    h("label", { class: "check" }, swap, h("span", {}, "左右を入れ替える（既定は左が短点）")),
+    h("p", { class: "note" },
+      "スクイーズ式（iambic B）のエレキーです。画面下の左右のパッドを人差し指と中指で押します。" +
+      "パソコンではキーボードの ↓（左のパッド）と →（右のパッド）でも操作できます"),
+  );
+  const startLabel = () => (ctx.settings.sendInput === "paddle" ? "はじめる" : "マイクを開始");
+  const startBtn = h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, startLabel());
   ctx.render(
     h("h1", {}, "送信練習"),
     h("p", { class: "note" },
-      "練習機のサイドトーンを iPhone のマイクで拾って、送った符号を復号・採点します。" +
-      "送信中はアプリから音を出しません。採点は試験の基準（誤字・脱字・冗字 3 点、符号不明りょう 1 点など）です"),
+      "練習機のサイドトーンを iPhone のマイクで拾うか、画面のパドルで送った符号を復号・採点します。" +
+      "マイクのときは送信中にアプリから音を出しません。採点は試験の基準（誤字・脱字・冗字 3 点、符号不明りょう 1 点など）です"),
+    h("div", { class: "settings" },
+      field("入力", select(
+        [["mic", "練習機の音（マイク）"], ["paddle", "画面のパドル"]],
+        s.sendInput,
+        (v) => {
+          ctx.updateSettings({ sendInput: v as "mic" | "paddle" });
+          paddleSettings.hidden = v !== "paddle";
+          startBtn.textContent = startLabel();
+        },
+      )),
+    ),
+    paddleSettings,
     h("div", { class: "settings" },
       field("文字セット", select(
         Object.entries(CHARSET_LABELS).map(([v, l]) => [v, l]),
@@ -72,7 +110,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
       )),
       h("label", { class: "check" }, focus, h("span", {}, "送信の苦手な文字を多めに出す")),
     ),
-    h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, "マイクを開始"),
+    startBtn,
     h("h2", {}, "模擬試験"),
     h("p", { class: "note" },
       `試験（欧文暗語 1 分間 ${EXAM_CPM} 字・約 ${EXAM_MINUTES} 分間）と同じく時間を区切って送ります。` +
@@ -116,7 +154,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
           ...sends.slice(0, 5).map((r) =>
             h("tr", {},
               h("th", {}, new Date(r.ts).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })),
-              h("td", {}, r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ"),
+              h("td", {}, (r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ") + (r.input === "paddle" ? "（画面）" : "")),
               h("td", {}, `${r.points} 点`),
               h("td", {}, r.cpm === null ? "―" : `${Math.round(r.cpm)} 字/分`),
               h("td", {}, `${r.target.length} 字`),
@@ -152,6 +190,29 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   const skipBtn = h("button", { type: "button", onclick: () => session.skipWarmup() }, "VVV を省略する");
   const finishBtn = h("button", { type: "button", class: "primary", onclick: () => finish() }, "終了");
 
+  let raf = 0;
+  let releaseScreen: () => void = () => {};
+  let lastPhase: SendPhase | null = null;
+  let dirty = true;
+  /** 画面に表示している、今送っている組 */
+  let shownGroup = -1;
+  const onEvents = (events: DecodeEvent[], now: number) => {
+    if (session.handle(events, now)) dirty = true;
+  };
+
+  const usePaddle = ctx.settings.sendInput === "paddle";
+  let input: SendInput | null = null;
+  let pads: ReturnType<typeof paddlePads> | null = null;
+  if (usePaddle) {
+    // タップの中で AudioContext を作る（iOS の自動再生制限のため）
+    const { paddleWpm, freq, volume, paddleSwap } = ctx.settings;
+    const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents);
+    input = paddle;
+    pads = paddlePads(paddle, paddleSwap);
+    // 符号の長さと速度はエレキーが決めるので、VVV で合わせる必要はない
+    session.skipWarmup();
+  }
+
   ctx.render(
     h("div", { class: "drill" },
       h("div", { class: "row" },
@@ -164,77 +225,77 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       grid,
       pending,
       h("div", { class: "row" }, skipBtn, finishBtn),
+      pads?.el,
     ),
   );
-
-  let listener: KeyListener | null = null;
-  let raf = 0;
-  let releaseScreen: () => void = () => {};
-  let lastPhase: SendPhase | null = null;
-  let dirty = true;
-  /** 画面に表示している、今送っている組 */
-  let shownGroup = -1;
 
   const close = () => {
     cancelAnimationFrame(raf);
     releaseScreen();
-    listener?.close();
-    listener = null;
+    pads?.detach();
+    input?.close();
+    input = null;
   };
-  ctx.setActive({ key: () => false, abort: close });
+  ctx.setActive({ key: (e) => pads?.key(e) ?? false, abort: close });
 
-  try {
-    listener = await KeyListener.open(
-      { freq: lastFreq, wpm: lastWpm },
-      {
-        onEvents: (events, now) => {
-          if (session.handle(events, now)) dirty = true;
+  if (!input) {
+    try {
+      input = await KeyListener.open(
+        { freq: lastFreq, wpm: lastWpm },
+        {
+          onEvents,
+          onFreq: (f) => (lastFreq = Math.round(f)),
+          onEnded: () => {
+            ctx.stopDrill();
+            showBanner("マイクが止められたため、練習を中断しました");
+          },
         },
-        onFreq: (f) => (lastFreq = Math.round(f)),
-        onEnded: () => {
-          ctx.stopDrill();
-          showBanner("マイクが止められたため、練習を中断しました");
-        },
-      },
-    );
-  } catch (e) {
-    console.error("failed to start microphone", e);
-    ctx.setActive(null);
-    showBanner(`マイクを開始できませんでした（${e instanceof Error ? e.name : String(e)}）`);
-    void showSendMenu(ctx);
-    return;
+      );
+    } catch (e) {
+      console.error("failed to start microphone", e);
+      ctx.setActive(null);
+      showBanner(`マイクを開始できませんでした（${e instanceof Error ? e.name : String(e)}）`);
+      void showSendMenu(ctx);
+      return;
+    }
   }
   void keepScreenOn().then((release) => (releaseScreen = release));
 
   const draw = () => {
     raf = requestAnimationFrame(draw);
-    const l = listener;
+    const l = input;
     if (!l) return;
     if (session.timeUp(l.now)) {
       // 時間切れ。キーを上げたまま確定していない符号も文字にしてから終える
       session.handle(l.decoder.tick(l.now + 60), l.now);
       return finish();
     }
-    if (session.tick(l.now, l.detector.keyDown)) dirty = true;
+    if (session.tick(l.now, l.keyDown)) dirty = true;
     if (session.phase === "finished") return finish();
 
-    lamp.classList.toggle("on", l.detector.keyDown);
-    if (lastPhase === "warmup" && session.phase !== "warmup") {
-      // VVV で確認できた周波数と速度で固定する。練習機の速度と音は練習の途中で変えないので、
-      // 外の音に周波数を持っていかれたり、送り方で速度の推定がぶれたりしないようにする
-      l.lock();
-      lastFreq = Math.round(l.detector.freq);
-      lastWpm = l.decoder.wpm;
+    lamp.classList.toggle("on", l.keyDown);
+    if (l instanceof KeyListener) {
+      if (lastPhase === "warmup" && session.phase !== "warmup") {
+        // VVV で確認できた周波数と速度で固定する。練習機の速度と音は練習の途中で変えないので、
+        // 外の音に周波数を持っていかれたり、送り方で速度の推定がぶれたりしないようにする
+        l.lock();
+        lastFreq = Math.round(l.detector.freq);
+        lastWpm = l.decoder.wpm;
+      }
+      const locked = session.phase === "warmup" ? "" : "（固定）";
+      speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
+    } else {
+      speed.textContent = `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`;
     }
-    const locked = session.phase === "warmup" ? "" : "（固定）";
-    speed.textContent = `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`;
     pending.textContent = prettyCode(l.decoder.pendingCode);
     if (mode.kind === "mock") renderClock(clock, session, mode, l.now);
     if (session.phase !== lastPhase) {
       lastPhase = session.phase;
       status.textContent = session.phase === "sending" && mode.kind === "mock"
         ? "送信中… 時間になるか、送り終えて 3 秒たつと終了します"
-        : STATUS[session.phase];
+        : session.phase === "ready" && usePaddle
+          ? "お題を送ってください"
+          : STATUS[session.phase];
       skipBtn.hidden = session.phase !== "warmup";
     }
     if (dirty) {
@@ -253,7 +314,8 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   raf = requestAnimationFrame(draw);
 
   function finish(): void {
-    const wpm = listener?.decoder.wpm ?? 0;
+    const wpm = input?.decoder.wpm ?? 0;
+    const via = usePaddle ? "paddle" : "mic";
     close();
     ctx.setActive(null);
     session.finish();
@@ -263,13 +325,81 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     }
     const record = session.toRecord(
       mode.kind === "mock"
-        ? { mode: "mock", charset, wpm, minutes: mode.minutes, targetCpm: mode.cpm }
-        : { mode: "group", charset, wpm },
+        ? { mode: "mock", charset, wpm, minutes: mode.minutes, targetCpm: mode.cpm, input: via }
+        : { mode: "group", charset, wpm, input: via },
     );
     records = [record, ...records];
     void saveSend(record).catch((e) => console.error("failed to save send", e));
     showSendResult(ctx, session, record, mode);
   }
+}
+
+/**
+ * 画面のパドル。左右のパッドをタッチ（複数の指を同時に）で押し、キーボードでは ↓ が左・→ が右。
+ * 既定は左が短点・右が長点で、swap なら入れ替える
+ */
+function paddlePads(paddle: VirtualPaddle, swap: boolean) {
+  const sides: [Paddle, Paddle] = swap ? ["dash", "dot"] : ["dot", "dash"];
+  const keys: Record<string, 0 | 1> = { ArrowDown: 0, ArrowRight: 1 };
+  /** パッドごとに押している指（ポインター）とキー */
+  const pressing = [new Set<number | string>(), new Set<number | string>()];
+  const press = (i: 0 | 1, who: number | string) => {
+    const set = pressing[i];
+    if (set.has(who)) return;
+    set.add(who);
+    if (set.size === 1) {
+      pads[i].classList.add("pressed");
+      paddle.press(sides[i]);
+    }
+  };
+  const release = (i: 0 | 1, who: number | string) => {
+    const set = pressing[i];
+    if (!set.delete(who) || set.size > 0) return;
+    pads[i].classList.remove("pressed");
+    paddle.release(sides[i]);
+  };
+  const releaseAll = () => {
+    for (const i of [0, 1] as const) for (const who of [...pressing[i]]) release(i, who);
+  };
+
+  const pads = ([0, 1] as const).map((i) => {
+    const pad = h("div", { class: "paddle-pad" },
+      h("span", { class: "paddle-code" }, sides[i] === "dot" ? "·" : "−"),
+      h("span", { class: "paddle-key" }, i === 0 ? "↓" : "→"));
+    pad.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      // 指を少し動かしても離したことにならないよう、ポインターを捕まえておく
+      pad.setPointerCapture(e.pointerId);
+      press(i, e.pointerId);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+      pad.addEventListener(type, (e) => release(i, e.pointerId));
+    }
+    pad.addEventListener("contextmenu", (e) => e.preventDefault());
+    return pad;
+  });
+
+  const onKeyUp = (e: KeyboardEvent) => {
+    const i = keys[e.key];
+    if (i !== undefined) release(i, e.key);
+  };
+  document.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", releaseAll);
+
+  return {
+    el: h("div", { class: "paddle-pads" }, ...pads),
+    /** キーを押したとき。パドルのキーなら true */
+    key(e: KeyboardEvent): boolean {
+      const i = keys[e.key];
+      if (i === undefined) return false;
+      if (!e.repeat) press(i, e.key);
+      return true;
+    },
+    detach(): void {
+      document.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", releaseAll);
+    },
+  };
 }
 
 /** 模擬試験の経過時間と、目標の速度に対して何字進んでいるか（遅れているか） */
