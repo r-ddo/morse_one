@@ -7,9 +7,11 @@ import type { Settings } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h, prettyCode, setText } from "./dom";
 import { field, range, select } from "./form";
-import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
+import { paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
+import { prepareCanvas as prepare } from "./canvas";
 import { touchLog } from "./touchLog";
 import { showBanner } from "./updateBanner";
+import { LAB_INPUT_OPTIONS, showVoiceLab, voiceOptions } from "./voiceLab";
 import { keepScreenOn } from "./wakeLock";
 
 /** 画面を開き直しても保つ実験の設定 */
@@ -51,6 +53,16 @@ interface LabView {
  * 画面のパドルを選ぶと、パドルで送った符号を復号する（符号の長さや間の確認用）
  */
 export function showLab(ctx: ScreenContext): void {
+  /** 入力を選び直したら、設定に保存して画面を作り直す（声は送信練習で選べないので保存しない） */
+  const changeInput = (v: string) => {
+    voiceOptions.selected = v === "voice";
+    if (v !== "voice") ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
+    showLab(ctx);
+  };
+  if (voiceOptions.selected) {
+    showVoiceLab(ctx, changeInput);
+    return;
+  }
   // 再生用の AudioContext とマイク用（パドルのサイドトーン用）が同時に動かないようにする
   ctx.player.release();
   let session: LabSession | null = null;
@@ -66,14 +78,12 @@ export function showLab(ctx: ScreenContext): void {
     log?.detach();
     showLab(ctx);
   };
-  const inputSelect = field("入力", select(
-    INPUT_OPTIONS,
-    via,
-    (v) => {
-      ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
-      rebuild();
-    },
-  ));
+  const inputSelect = field("入力", select(LAB_INPUT_OPTIONS, via, (v) => {
+    stop();
+    pads?.detach();
+    log?.detach();
+    changeInput(v);
+  }));
   // 画面のパドル・縦振電鍵は最初に押したときに始める（そのタップの中で音を出せるようにする）
   const onScreenKey = () => (session ??= LabSession.onScreen(ctx, view)).input;
   const log = onScreen ? touchLog({ live: true, header: "送信実験" }) : null;
@@ -418,23 +428,6 @@ class LabSession {
           : `長さは推定短点長を 1 とした値（直近 ${STATS_WINDOW} 個）。伸びは補正しないので、短点が長く符号内の間が短ければ送り方の癖`),
     );
   }
-}
-
-/** キャンバスを表示サイズに合わせ、描画用のコンテキストと色を返す */
-function prepare(canvas: HTMLCanvasElement): { g: CanvasRenderingContext2D; w: number; h: number; color: (name: string) => string } | null {
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.round(canvas.clientWidth * dpr);
-  const h = Math.round(canvas.clientHeight * dpr);
-  if (w === 0 || h === 0) return null;
-  if (canvas.width !== w || canvas.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-  }
-  const g = canvas.getContext("2d");
-  if (!g) return null;
-  g.clearRect(0, 0, w, h);
-  const style = getComputedStyle(canvas);
-  return { g, w, h, color: (name) => style.getPropertyValue(name).trim() };
 }
 
 function drawEnvelope(canvas: HTMLCanvasElement, frames: DetectorFrame[], now: number): void {
