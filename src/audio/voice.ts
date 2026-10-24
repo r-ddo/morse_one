@@ -20,11 +20,19 @@ export const DEFAULT_TUNING: VoiceTuning = { onDb: 15, dipDb: 6, charGap: 0.12 }
 
 /** 解析の間隔と、強さを測る窓の長さ（秒） */
 const HOP = 0.005;
-const WINDOW_HOPS = 4;
+const WINDOW_HOPS = 3;
 /** 声なしに戻る、雑音に対する強さ（dB） */
 const OFF_DB = 8;
-/** 下がりから上がり直したとみなす量（dB） */
-const RISE_DB = 3;
+/** 雑音はこの長さ（秒）の間の一番弱いところとする。ブロック（秒）ごとの最小値を並べて求める */
+const NOISE_SPAN = 1.5;
+const NOISE_BLOCK = 0.1;
+/**
+ * これより弱いところ（dBFS）は雑音に数えない。iOS の音声処理は無音のとき入力をほぼ 0 にすることがあり、
+ * そのまま基準にすると、ふつうの床の雑音に戻ったときに反応する
+ */
+const NOISE_MIN = -100;
+/** 声ありになったとき、雑音 + OFF_DB を超えていたところまで出だしをさかのぼる最大の長さ（秒） */
+const BACKDATE = 0.06;
 /** これより短い音節や変化は無視する（秒） */
 const MIN_SYLLABLE = 0.05;
 const MIN_CHANGE = 0.01;
@@ -57,8 +65,8 @@ export interface VoiceFrame {
 /**
  * 「タ」「ラ」と唱える声から、音節の出だしと終わりを検出する。
  * 声の帯域の強さ（dB）を HOP 秒ごとに求め、
- * - 雑音より onDb 強くなったら声あり（音節の始まり）、雑音 + OFF_DB を下回ったら声なし（音節の終わり）
- * - 声ありのまま、音節の山から dipDb 下がって RISE_DB 上がり直したら、いちばん下がったところで次の音節が始まったとする。
+ * - 雑音（直近 NOISE_SPAN 秒の一番弱いところ）より onDb 強くなったら声あり（音節の始まり）、雑音 + OFF_DB を下回ったら声なし（音節の終わり）
+ * - 声ありのまま、手前の山からも上がり直したところからも dipDb 以上低い谷があれば、谷の底で次の音節が始まったとする。
  *   「タ」は「t」の閉鎖でほぼ無音になるので前者、「ラ」は舌が触れて少し弱まるだけなので後者で拾う
  */
 export class VoiceDetector {
@@ -69,13 +77,21 @@ export class VoiceDetector {
   private sinceHop = 0;
   private acc = 0;
   private count = 0;
-  private noise: number | null = null;
+  /** 雑音の強さ。まだ分からなければ（入力がほぼ 0 のまま）声を検出しない */
+  private noise = Infinity;
+  private readonly noiseBlocks: number[] = [];
+  private blockMin = Infinity;
+  private blockHops = 0;
+  /** 出だしをさかのぼるための直近のフレームの強さ */
+  private readonly recent: { t: number; db: number }[] = [];
   private state = false;
   private pending = 0;
   private start = 0;
-  /** 今の音節の山の強さと、山のあとの一番下がったところ */
+  /** 今の音節の山（谷の手前の一番強いところ）と、そのあとの谷 */
   private peak = -Infinity;
   private dip: { db: number; t: number } | null = null;
+  /** 今の音節で一番強いところ（記録用） */
+  private top = -Infinity;
 
   constructor(readonly sampleRate: number, tuning: VoiceTuning = DEFAULT_TUNING) {
     this.tuning = tuning;
@@ -115,55 +131,80 @@ export class VoiceDetector {
     const db = 10 * Math.log10(power + 1e-12);
     // 窓の中央の時刻
     const t = this.time - (this.hops.length * HOP) / 2;
-    this.noise ??= db;
+    this.trackNoise(db);
+    this.recent.push({ t, db });
+    if (this.recent.length > BACKDATE / HOP + 2) this.recent.shift();
     const { onDb, dipDb } = this.tuning;
     const raw = this.state ? db > this.noise + OFF_DB : db > this.noise + onDb;
-    if (!this.state && !raw) {
-      // 雑音は下がるときは速く、上がるときはゆっくり追う
-      this.noise += (db < this.noise ? HOP / 0.05 : HOP / 3) * (db - this.noise);
-    }
     let onset = false;
     const minChange = Math.round(MIN_CHANGE / HOP);
     if (raw !== this.state) {
       if (++this.pending >= minChange) {
-        const at = t - ((this.pending - 1) * HOP);
+        let at = t - ((this.pending - 1) * HOP);
         this.pending = 0;
         this.state = raw;
         if (raw) {
+          // 強さが閾値に届くまでの立ち上がりの分だけ、出だしを早める
+          for (let k = this.recent.length - 1; k >= 0; k--) {
+            const f = this.recent[k];
+            if (f.t >= at) continue;
+            if (f.db <= this.noise + OFF_DB || at - f.t > BACKDATE) break;
+            at = f.t;
+          }
           this.begin(at, db);
           events.push({ down: true, t: at });
           onset = true;
         } else {
-          events.push({ down: false, t: at, split: false, dipDb: this.peak - db });
+          events.push({ down: false, t: at, split: false, dipDb: this.top - db });
         }
       }
     } else {
       this.pending = 0;
       if (this.state) {
+        this.top = Math.max(this.top, db);
         if (this.dip === null) {
           this.peak = Math.max(this.peak, db);
-          if (db < this.peak - dipDb) this.dip = { db, t };
+          if (db < this.peak) this.dip = { db, t };
         } else if (db < this.dip.db) {
           this.dip = { db, t };
-        } else if (db > this.dip.db + RISE_DB && this.dip.t - this.start >= MIN_SYLLABLE) {
-          const depth = this.peak - this.dip.db;
-          events.push({ down: false, t: this.dip.t, split: true, dipDb: depth });
-          events.push({ down: true, t: this.dip.t });
-          this.begin(this.dip.t, db);
-          onset = true;
-        } else if (db >= this.peak - dipDb / 2) {
-          // 少し揺れただけで山に戻った
-          this.dip = null;
-          this.peak = Math.max(this.peak, db);
+        } else {
+          // 谷の深さは、手前の山と今の強さの弱い方から測る（入力が戻っていく途中で手前の山が弱くても拾う）
+          const depth = Math.min(this.peak, db) - this.dip.db;
+          if (depth >= dipDb && this.dip.t - this.start >= MIN_SYLLABLE) {
+            events.push({ down: false, t: this.dip.t, split: true, dipDb: depth });
+            events.push({ down: true, t: this.dip.t });
+            this.begin(this.dip.t, db);
+            onset = true;
+          } else if (db >= this.peak) {
+            // 浅い谷だった
+            this.dip = null;
+            this.peak = db;
+          }
         }
       }
     }
     frames.push({ t, db, noiseDb: this.noise, on: this.state, onset });
   }
 
+  /**
+   * 雑音を直近 NOISE_SPAN 秒の一番弱いところとする。声ありかどうかによらず追うので、
+   * 床が上がっても（iOS の自動ゲインなど）しばらくすれば声ありのままにならない
+   */
+  private trackNoise(db: number): void {
+    if (db > NOISE_MIN) this.blockMin = Math.min(this.blockMin, db);
+    if (++this.blockHops * HOP >= NOISE_BLOCK) {
+      if (this.blockMin < Infinity) this.noiseBlocks.push(this.blockMin);
+      if (this.noiseBlocks.length * NOISE_BLOCK > NOISE_SPAN) this.noiseBlocks.shift();
+      this.blockMin = Infinity;
+      this.blockHops = 0;
+    }
+    this.noise = Math.min(this.blockMin, ...this.noiseBlocks);
+  }
+
   private begin(t: number, db: number): void {
     this.start = t;
     this.peak = db;
+    this.top = db;
     this.dip = null;
   }
 }

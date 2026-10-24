@@ -56,7 +56,7 @@ export function showVoiceLab(ctx: ScreenContext, onInputChange: (v: string) => v
   const { tuning } = voiceOptions;
   const sliders = h("div", { class: "settings" },
     h("h2", {}, "検出の調整"),
-    field("声ありとみなす強さ（雑音から）", range(6, 30, 1, tuning.onDb, (v) => `${v} dB`, (v) => setTuning({ onDb: v }))),
+    field("声ありとみなす強さ（雑音から）", range(6, 40, 1, tuning.onDb, (v) => `${v} dB`, (v) => setTuning({ onDb: v }))),
     field("「ラ」の区切りとみなす弱まり", range(2, 15, 1, tuning.dipDb, (v) => `${v} dB`, (v) => setTuning({ dipDb: v }))),
     field("文字の区切りとみなす無音", range(50, 400, 10, Math.round(tuning.charGap * 1000), (v) => `${v} ms`,
       (v) => setTuning({ charGap: v / 1000 }))),
@@ -315,7 +315,18 @@ function drawVoice(canvas: HTMLCanvasElement, frames: VoiceFrame[], now: number,
 
   const line = (value: (f: VoiceFrame) => number, stroke: string, dash: number[]) => {
     g.beginPath();
-    visible.forEach((f, i) => (i === 0 ? g.moveTo(x(f.t), y(value(f))) : g.lineTo(x(f.t), y(value(f)))));
+    let drawing = false;
+    for (const f of visible) {
+      const v = value(f);
+      // 雑音がまだ分からないところは描かない
+      if (!Number.isFinite(v)) {
+        drawing = false;
+        continue;
+      }
+      if (drawing) g.lineTo(x(f.t), y(v));
+      else g.moveTo(x(f.t), y(v));
+      drawing = true;
+    }
     g.strokeStyle = stroke;
     g.setLineDash(dash);
     g.lineWidth = dpr;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DecodeEvent } from "./decoder";
-import { DEFAULT_TUNING, VoiceDecoder, VoiceDetector, encodeWav, type VoiceChar } from "./voice";
+import { DEFAULT_TUNING, VoiceDecoder, VoiceDetector, encodeWav, type VoiceChar, type VoiceTuning } from "./voice";
 
 const RATE = 48000;
 
@@ -79,10 +79,14 @@ function voice(text: string, opts: VoiceOptions = {}): { samples: Float32Array; 
   return { samples: out, onsets: syllables.map((s) => s.start) };
 }
 
-function decode(samples: Float32Array, charGap = DEFAULT_TUNING.charGap): { text: string; chars: VoiceChar[]; onsets: number[] } {
-  const detector = new VoiceDetector(RATE);
+function decode(samples: Float32Array): { text: string; chars: VoiceChar[]; onsets: number[] } {
+  return decodeWith(samples, DEFAULT_TUNING);
+}
+
+function decodeWith(samples: Float32Array, tuning: VoiceTuning): { text: string; chars: VoiceChar[]; onsets: number[] } {
+  const detector = new VoiceDetector(RATE, tuning);
   const chars: VoiceChar[] = [];
-  const decoder = new VoiceDecoder(charGap, (c) => chars.push(c));
+  const decoder = new VoiceDecoder(tuning.charGap, (c) => chars.push(c));
   let text = "";
   const onsets: number[] = [];
   const apply = (events: DecodeEvent[]) => {
@@ -113,6 +117,40 @@ describe("VoiceDetector", () => {
     const found = decode(samples).onsets;
     expect(found).toHaveLength(onsets.length);
     found.forEach((t, i) => expect(Math.abs(t - onsets[i])).toBeLessThan(0.03));
+  });
+
+  it.each([15, 25])("無音のあとに入力が絞られて最初の「タ」が弱くても拾う（強さ %i dB）", (onDb) => {
+    const { samples, onsets } = voice("タラ", { noise: 0.0003 });
+    // iOS の音声処理が入力を戻していくのをまねて、声の出だしから 0.3 秒で −15 dB から 0 dB に上げる
+    const from = Math.round(0.5 * RATE);
+    for (let i = from; i < from + 0.3 * RATE; i++) samples[i] *= 10 ** ((-15 * (1 - (i - from) / (0.3 * RATE))) / 20);
+    const found = decodeWith(samples, { ...DEFAULT_TUNING, onDb });
+    expect(found.onsets).toHaveLength(2);
+    expect(Math.abs(found.onsets[0] - onsets[0])).toBeLessThan(0.03);
+    expect(found.text).toBe("I");
+  });
+
+  it("床の雑音で声ありのままにならない", () => {
+    // 入力がほぼ 0 の区間のあと、ふつうの床の雑音に戻る
+    const quiet = new Float32Array(2 * RATE);
+    const { samples } = voice("タター", { noise: 0.003 });
+    const all = new Float32Array(quiet.length + samples.length);
+    all.set(samples, quiet.length);
+    expect(decode(all).text).toBe("A");
+  });
+
+  it.each([70, 80, 110])("声が低くても（%i Hz）長い音節を分けない", (f0) => {
+    const samples = new Float32Array(1.5 * RATE);
+    let phase = 0;
+    for (let i = Math.round(0.3 * RATE); i < Math.round(0.9 * RATE); i++) {
+      const t = i / RATE;
+      const env = Math.min(1, (t - 0.3) / 0.01, (0.9 - t) / 0.03);
+      phase += (2 * Math.PI * f0 * (1 + 0.03 * Math.sin(2 * Math.PI * 5 * t))) / RATE;
+      let x = 0;
+      for (let h = 1; h <= 12; h++) x += Math.sin(h * phase) / h;
+      samples[i] = 0.1 * env * x;
+    }
+    expect(decode(samples).onsets).toHaveLength(1);
   });
 
   it("少しの揺れでは音節を分けない", () => {
