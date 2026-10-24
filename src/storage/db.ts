@@ -1,5 +1,6 @@
 import type { SendInput } from "./settings";
 import { ConfusionTracker } from "../training/confusion";
+import type { SendSingleVerdict } from "../training/sendSingle";
 import type { CharStat } from "../training/stats";
 
 /** 1 回の解答の記録 */
@@ -25,7 +26,7 @@ export interface Attempt {
 }
 
 const DB_NAME = "morse_one";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -44,6 +45,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (e.oldVersion < 3) {
         db.createObjectStore("sends", { keyPath: "id", autoIncrement: true });
+      }
+      if (e.oldVersion < 4) {
+        db.createObjectStore("sendAttempts", { keyPath: "id", autoIncrement: true });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -174,7 +178,7 @@ export interface SendRecord {
   marks?: string;
   /** お題の各文字に対応した送信（対応がなければ null）。古い記録にはない */
   sentAt?: (string | null)[];
-  /** 入力（練習機の音か、画面のパドル・縦振電鍵か）。古い記録にはなく、練習機の音 */
+  /** 入力（練習機の音か、画面のパドル・縦振電鍵か、声か）。古い記録にはなく、練習機の音 */
   input?: SendInput;
 }
 
@@ -194,6 +198,36 @@ export async function loadSends(): Promise<SendRecord[]> {
   return (req.result as SendRecord[]).sort((a, b) => b.ts - a.ts);
 }
 
+/** 単字即答（送信）の 1 問の結果。文字ごとの成績は記録から作る */
+export interface SendAttempt {
+  id?: number;
+  ts: number;
+  target: string;
+  /** 最初に送った文字（符号表にない符号は符号のまま）。送らなければ null */
+  sent: string | null;
+  verdict: SendSingleVerdict;
+  /** 表示してから送り始めるまで（ミリ秒）。目標時間内に正しく送ったときだけ */
+  rtMs: number | null;
+  /** 出題時の目標時間（ミリ秒） */
+  limitMs: number;
+  input: SendInput;
+}
+
+export async function saveSendAttempt(attempt: SendAttempt): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction("sendAttempts", "readwrite");
+  tx.objectStore("sendAttempts").add(attempt);
+  await done(tx);
+}
+
+export async function loadSendAttempts(): Promise<SendAttempt[]> {
+  const db = await openDb();
+  const tx = db.transaction("sendAttempts", "readonly");
+  const req = tx.objectStore("sendAttempts").getAll();
+  await done(tx);
+  return req.result as SendAttempt[];
+}
+
 export async function loadAttempts(): Promise<Attempt[]> {
   const db = await openDb();
   const tx = db.transaction("attempts", "readonly");
@@ -207,39 +241,45 @@ export interface StoredData {
   charStats: CharStat[];
   mocks: MockResult[];
   sends: SendRecord[];
+  sendAttempts: SendAttempt[];
 }
 
 export async function loadAll(): Promise<StoredData> {
   const db = await openDb();
-  const tx = db.transaction(["attempts", "charStats", "mocks", "sends"], "readonly");
+  const tx = db.transaction(["attempts", "charStats", "mocks", "sends", "sendAttempts"], "readonly");
   const attempts = tx.objectStore("attempts").getAll();
   const charStats = tx.objectStore("charStats").getAll();
   const mocks = tx.objectStore("mocks").getAll();
   const sends = tx.objectStore("sends").getAll();
+  const sendAttempts = tx.objectStore("sendAttempts").getAll();
   await done(tx);
   return {
     attempts: attempts.result as Attempt[],
     charStats: charStats.result as CharStat[],
     mocks: mocks.result as MockResult[],
     sends: sends.result as SendRecord[],
+    sendAttempts: sendAttempts.result as SendAttempt[],
   };
 }
 
 /** 保存されているデータをすべて置き換える（1 つのトランザクションで行い、失敗したら元のまま） */
 export async function replaceAll(data: StoredData): Promise<void> {
   const db = await openDb();
-  const tx = db.transaction(["attempts", "charStats", "mocks", "sends"], "readwrite");
+  const tx = db.transaction(["attempts", "charStats", "mocks", "sends", "sendAttempts"], "readwrite");
   const attempts = tx.objectStore("attempts");
   const charStats = tx.objectStore("charStats");
   const mocks = tx.objectStore("mocks");
   const sends = tx.objectStore("sends");
+  const sendAttempts = tx.objectStore("sendAttempts");
   attempts.clear();
   charStats.clear();
   mocks.clear();
   sends.clear();
+  sendAttempts.clear();
   for (const a of data.attempts) attempts.put(a);
   for (const s of data.charStats) charStats.put(s);
   for (const m of data.mocks) mocks.put(m);
   for (const r of data.sends) sends.put(r);
+  for (const a of data.sendAttempts) sendAttempts.put(a);
   await done(tx);
 }

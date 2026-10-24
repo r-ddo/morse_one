@@ -54,6 +54,10 @@ export interface Settings {
    * page: 送信実験と同じく、ページの下にパッドを固定してページをスクロールする
    */
   sendPadLayout: "fit" | "page";
+  /** 単字即答（送信）の目標時間（表示してから送り始めるまで、ミリ秒）。練習結果に応じて自動で変わる */
+  sendSingleLimitMs: number;
+  /** 単字即答（送信）の 1 セッションの問題数 */
+  sendSingleQuestions: number;
   /** 声で唱える入力の検出の調整（送信実験で変える） */
   voiceTuning: VoiceTuning;
 }
@@ -84,6 +88,8 @@ export const DEFAULT_SETTINGS: Settings = {
   paddleWpm: 20,
   paddleSwap: false,
   sendPadLayout: "fit",
+  sendSingleLimitMs: 2000,
+  sendSingleQuestions: 30,
   voiceTuning: DEFAULT_TUNING,
 };
 

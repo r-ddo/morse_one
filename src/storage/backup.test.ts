@@ -7,6 +7,7 @@ const data = {
   charStats: [{ char: "A", attempts: 1, correct: 1, accEma: 1, rtEma: 300, lastSeen: 1 }],
   mocks: [],
   sends: [],
+  sendAttempts: [{ ts: 2, target: "B", sent: "B", verdict: "fast" as const, rtMs: 800, limitMs: 2000, input: "voice" as const }],
 };
 
 describe("backup", () => {
@@ -31,8 +32,13 @@ describe("backup", () => {
   });
 
   it("reads version 1 backups without sending records", () => {
-    const { sends: _, ...v1 } = { ...makeBackup(data, DEFAULT_SETTINGS), version: 1 };
+    const { sends: _, sendAttempts: __, ...v1 } = { ...makeBackup(data, DEFAULT_SETTINGS), version: 1 };
     expect(parseBackup(JSON.stringify(v1)).sends).toEqual([]);
+  });
+
+  it("reads version 2 backups without single-character sending records", () => {
+    const { sendAttempts: _, ...v2 } = { ...makeBackup(data, DEFAULT_SETTINGS), version: 2 };
+    expect(parseBackup(JSON.stringify(v2)).sendAttempts).toEqual([]);
   });
 
   it("rejects backups from a newer version", () => {

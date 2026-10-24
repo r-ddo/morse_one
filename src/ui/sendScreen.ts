@@ -1,8 +1,5 @@
 import type { DecodeEvent } from "../audio/decoder";
-import { KeyListener } from "../audio/listener";
-import { VirtualPaddle, VirtualStraightKey } from "../audio/paddle";
-import { VoiceListener } from "../audio/voice";
-import { loadSends, saveSend, type SendRecord } from "../storage/db";
+import { loadSendAttempts, loadSends, saveSend, type SendAttempt, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { farnsworth } from "../audio/timing";
 import { SendSession, sendGroups, type SendPhase } from "../training/sendDrill";
@@ -13,7 +10,12 @@ import type { ScreenContext } from "./context";
 import { h, prettyCode, setClass, setText } from "./dom";
 import { field, select } from "./form";
 import { touchLog, type TouchLog } from "./touchLog";
-import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad, type TouchPads } from "./paddlePads";
+import { INPUT_OPTIONS, paddleSettingsCard, straightKeyNote, type TouchPads } from "./paddlePads";
+import { startSendSingle } from "./sendSingleScreen";
+import { weakness } from "../training/stats";
+import { sendSingleStats } from "../training/sendSingle";
+import { MORSE } from "../audio/code";
+import { createPadInput, describeInput, lockAfterWarmup, needsWarmup, openMicInput, rememberInput, usesMic, warmupText, type SendInput } from "./sendInput";
 import type { Settings } from "../storage/settings";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
@@ -35,42 +37,32 @@ let records: SendRecord[] = [];
 /** グループ送信か、時間を区切った模擬試験か */
 type SendMode = { kind: "group" } | { kind: "mock"; cpm: number; minutes: number };
 
-/** 前回固定した周波数（Hz）と速度（WPM）。次の練習の初期値にする */
-let lastFreq = 700;
-let lastWpm = 20;
-/** 画面の縦振電鍵で前回推定した速度（WPM）。次の練習の初期値にする */
-let lastStraightWpm = 15;
-/** 声で前回推定した短点・長点の長さと境（秒）。次の練習の初期値にする */
-let lastVoice: { threshold: number; dotLen: number; dashLen: number } | null = null;
-
-/** 送信の入力（練習機の音を拾うマイク、画面のパドル・縦振電鍵、声）に共通の部分 */
-interface SendInput {
-  /** 入力の時刻（秒） */
-  readonly now: number;
-  readonly keyDown: boolean;
-  readonly decoder: {
-    readonly wpm: number;
-    /** 文字として確定していない符号 */
-    readonly pendingCode: string;
-    /** 無音が続いたときの文字・語の区切り */
-    tick(t: number): DecodeEvent[];
-  };
-  close(): void;
-}
-
 const STATUS: Record<SendPhase, string> = {
-  warmup: "まず VVV を送ってください（周波数と速度を合わせて固定します）",
+  warmup: "",
   ready: "準備できました。お題を送ってください",
   sending: "送信中… 送り終えて 3 秒たつと終了します",
   finished: "",
 };
 
 export async function showSendMenu(ctx: ScreenContext): Promise<void> {
-  const sends = await loadSends().catch((e): SendRecord[] => {
-    console.error("failed to load sends", e);
-    return [];
-  });
+  const [sends, singles] = await Promise.all([
+    loadSends().catch((e): SendRecord[] => {
+      console.error("failed to load sends", e);
+      return [];
+    }),
+    loadSendAttempts().catch((e): SendAttempt[] => {
+      console.error("failed to load send attempts", e);
+      return [];
+    }),
+  ]);
   records = sends;
+  // 単字即答（送信）の苦手な文字（送った記録がある文字だけ）
+  const singleStats = sendSingleStats(singles);
+  const singleWeak = [...singleStats.values()]
+    .map((st) => ({ char: st.char, w: weakness(st, ctx.settings.sendSingleLimitMs, Date.now()) }))
+    .filter((x) => x.w >= 0.5)
+    .sort((a, b) => b.w - a.w)
+    .slice(0, 8);
   const stats = sendCharStats(sends, Date.now() - WEAK_WINDOW_MS);
   const weak = weakSendChars(stats, 8);
   const confusions = sendConfusions(stats, 6);
@@ -90,12 +82,12 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     h("p", { class: "note" }, "送信練習の画面でだけ短点のタッチが届かない問題を調べるための切り替えです"),
   );
   const showInput = (v: Settings["sendInput"]) => {
-    layoutSettings.hidden = v === "mic" || v === "voice";
+    layoutSettings.hidden = usesMic(v);
     paddleSettings.hidden = v !== "paddle";
     straightSettings.hidden = v !== "straight";
   };
   showInput(s.sendInput);
-  const startLabel = () => (ctx.settings.sendInput === "mic" || ctx.settings.sendInput === "voice" ? "マイクを開始" : "はじめる");
+  const startLabel = () => (usesMic(ctx.settings.sendInput) ? "マイクを開始" : "はじめる");
   const startBtn = h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, startLabel());
   ctx.render(
     h("h1", {}, "送信練習"),
@@ -131,6 +123,28 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
       h("label", { class: "check" }, focus, h("span", {}, "送信の苦手な文字を多めに出す")),
     ),
     startBtn,
+    h("h2", {}, "単字即答（送信）"),
+    h("p", { class: "note" },
+      "表示した文字の符号を送ります。符号を覚える練習（単語カードのように使えます）。" +
+      "目標時間（自動で調整）を過ぎても送り始めなければ符号を表示し、違う符号を送ったら正しく送るまで繰り返します。" +
+      "成績は最初の 1 回で付け、苦手な文字を多めに出します。文字セットと入力は上と共通です"),
+    h("div", { class: "settings" },
+      field("問題数", select(
+        [20, 30, 50].map((v) => [String(v), `${v} 問`]),
+        String(s.sendSingleQuestions),
+        (v) => ctx.updateSettings({ sendSingleQuestions: Number(v) }),
+      )),
+      h("div", { class: "note" }, `目標時間 ${(s.sendSingleLimitMs / 1000).toFixed(2)} 秒（表示してから送り始めるまで）`),
+    ),
+    h("button", {
+      class: "primary",
+      type: "button",
+      onclick: () => void startSendSingle(ctx, singles, () => void showSendMenu(ctx)),
+    }, "単字即答（送信）をはじめる"),
+    singleWeak.length > 0 && h("div", { class: "misses" },
+      h("h2", {}, "単字即答（送信）の苦手な文字"),
+      ...singleWeak.map((x) => h("span", { class: "chip" }, `${x.char} ${prettyCode(MORSE[x.char] ?? "")}`)),
+    ),
     h("h2", {}, "模擬試験"),
     h("p", { class: "note" },
       `試験（欧文暗語 1 分間 ${EXAM_CPM} 字・約 ${EXAM_MINUTES} 分間）と同じく時間を区切って送ります。` +
@@ -218,47 +232,18 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   let shownGroup = -1;
   const via = ctx.settings.sendInput;
   // 画面のパドル・縦振電鍵では、届いたタッチを記録して結果画面に出す（取りこぼしの原因を実機で調べるため）
-  const log = via === "mic" || via === "voice" ? null : touchLog({ live: false, header: `送信練習・配置 ${ctx.settings.sendPadLayout}` });
+  const log = usesMic(via) ? null : touchLog({ live: false, header: `送信練習・配置 ${ctx.settings.sendPadLayout}` });
   const onEvents = (events: DecodeEvent[], now: number) => {
     if (log) for (const e of events) if (e.type === "char") log.add(`文字 ${e.char ?? prettyCode(e.code)}`);
     if (session.handle(events, now)) dirty = true;
   };
 
-  let input: SendInput | null = null;
-  let pads: TouchPads | null = null;
-  // タップの中で AudioContext を作る（iOS の自動再生制限のため）
-  const { paddleWpm, freq, volume, paddleSwap } = ctx.settings;
-  if (via === "paddle") {
-    const paddle = new VirtualPaddle({ wpm: paddleWpm, freq, volume }, onEvents);
-    input = paddle;
-    const name = { dot: "短点", dash: "長点" } as const;
-    pads = paddlePads({
-      press: (p) => {
-        log?.add(`★ ${name[p]}を押す`);
-        paddle.press(p);
-      },
-      release: (p) => {
-        log?.add(`☆ ${name[p]}を離す`);
-        paddle.release(p);
-      },
-    }, paddleSwap);
-    // 符号の長さと速度はエレキーが決めるので、VVV で合わせる必要はない
-    session.skipWarmup();
-  } else if (via === "straight") {
-    // 速度は送り方で決まるので、VVV で推定を合わせてから始める（固定はしない）
-    const key = new VirtualStraightKey({ wpm: lastStraightWpm, freq, volume }, onEvents);
-    input = key;
-    pads = straightKeyPad({
-      press: () => {
-        log?.add("★ 電鍵を押す");
-        key.press();
-      },
-      release: () => {
-        log?.add("☆ 電鍵を離す");
-        key.release();
-      },
-    });
-  }
+  // タップの中で作る（画面のパドル・縦振電鍵のサイドトーンの AudioContext。iOS の自動再生制限のため）
+  const pad = createPadInput(ctx, onEvents, log);
+  let input: SendInput | null = pad?.input ?? null;
+  const pads: TouchPads | null = pad?.pads ?? null;
+  // 速度を人が決める入力（縦振電鍵・声）は VVV で推定を合わせてから始める（固定はしない）
+  if (!needsWarmup(via)) session.skipWarmup();
 
   /** 画面のパドル・縦振電鍵で、画面に収める配置か */
   const fit = pads !== null && ctx.settings.sendPadLayout === "fit";
@@ -290,43 +275,12 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   };
   ctx.setActive({ key: (e) => pads?.key(e) ?? false, abort: close });
 
-  if (!input && via === "voice") {
-    // 唱える速さは人が決めるので、VVV で短点と長点の長さを合わせてから始める（固定はしない）
-    try {
-      const voice = await VoiceListener.open(
-        { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        ctx.settings.voiceTuning,
-        {
-          onEvents,
-          onEnded: () => {
-            ctx.stopDrill();
-            showBanner("マイクが止められたため、練習を中断しました");
-          },
-        },
-      );
-      if (lastVoice) Object.assign(voice.decoder, lastVoice);
-      input = voice;
-    } catch (e) {
-      console.error("failed to start microphone", e);
-      ctx.setActive(null);
-      showBanner(`マイクを開始できませんでした（${e instanceof Error ? e.name : String(e)}）`);
-      void showSendMenu(ctx);
-      return;
-    }
-  }
   if (!input) {
     try {
-      input = await KeyListener.open(
-        { freq: lastFreq, wpm: lastWpm },
-        {
-          onEvents,
-          onFreq: (f) => (lastFreq = Math.round(f)),
-          onEnded: () => {
-            ctx.stopDrill();
-            showBanner("マイクが止められたため、練習を中断しました");
-          },
-        },
-      );
+      input = await openMicInput(ctx, onEvents, () => {
+        ctx.stopDrill();
+        showBanner("マイクが止められたため、練習を中断しました");
+      });
     } catch (e) {
       console.error("failed to start microphone", e);
       ctx.setActive(null);
@@ -354,24 +308,8 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
     if (session.phase === "finished") return finish();
 
     lamp.classList.toggle("on", l.keyDown);
-    if (l instanceof KeyListener) {
-      if (lastPhase === "warmup" && session.phase !== "warmup") {
-        // VVV で確認できた周波数と速度で固定する。練習機の速度と音は練習の途中で変えないので、
-        // 外の音に周波数を持っていかれたり、送り方で速度の推定がぶれたりしないようにする
-        l.lock();
-        lastFreq = Math.round(l.detector.freq);
-        lastWpm = l.decoder.wpm;
-      }
-      const locked = session.phase === "warmup" ? "" : "（固定）";
-      setText(speed, `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`);
-    } else if (l instanceof VoiceListener) {
-      const ms = (s: number) => `${Math.round(s * 1000)} ms`;
-      setText(speed, `声・短点 ${ms(l.decoder.dotLen)}・長点 ${ms(l.decoder.dashLen)}`);
-    } else if (via === "paddle") {
-      setText(speed, `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`);
-    } else {
-      setText(speed, `画面の縦振電鍵・推定 ${l.decoder.wpm.toFixed(1)} WPM`);
-    }
+    if (lastPhase === "warmup" && session.phase !== "warmup") lockAfterWarmup(l);
+    setText(speed, describeInput(l, session.phase === "warmup"));
     // 表示は値が変わったときだけ書き換える（毎フレームの書き換えが、iPhone で 2 本目の指のタッチが届かない原因と疑っている）
     setText(pending, prettyCode(l.decoder.pendingCode));
     if (mode.kind === "mock") renderClock(clock, session, mode, l.now);
@@ -381,13 +319,11 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
         ? "送信中… 時間になるか、送り終えて 3 秒たつと終了します"
         : session.phase === "ready" && via === "paddle"
           ? "お題を送ってください"
-          : session.phase === "warmup" && via === "straight"
-            ? "まず VVV を送ってください（速度の推定を合わせます）"
-            : session.phase === "warmup" && via === "voice"
-              ? "まず VVV を唱えてください（短点と長点の長さを合わせます）"
-              : session.phase === "ready" && via === "voice"
-                ? "準備できました。お題を唱えてください"
-                : STATUS[session.phase];
+          : session.phase === "warmup"
+            ? warmupText(via)
+            : session.phase === "ready" && via === "voice"
+              ? "準備できました。お題を唱えてください"
+              : STATUS[session.phase];
       skipBtn.hidden = session.phase !== "warmup";
     }
     if (dirty) {
@@ -424,11 +360,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
 
   function finish(): void {
     const wpm = input?.decoder.wpm ?? 0;
-    if (via === "straight" && input) lastStraightWpm = input.decoder.wpm;
-    if (input instanceof VoiceListener) {
-      const { threshold, dotLen, dashLen } = input.decoder;
-      lastVoice = { threshold, dotLen, dashLen };
-    }
+    if (input) rememberInput(input);
     close();
     ctx.setActive(null);
     session.finish();
