@@ -7,11 +7,11 @@ import type { Settings } from "../storage/settings";
 import type { ScreenContext } from "./context";
 import { h, prettyCode, setText } from "./dom";
 import { field, range, select } from "./form";
-import { paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
+import { INPUT_OPTIONS, paddlePads, paddleSettingsCard, straightKeyNote, straightKeyPad } from "./paddlePads";
 import { prepareCanvas as prepare } from "./canvas";
 import { touchLog } from "./touchLog";
 import { showBanner } from "./updateBanner";
-import { LAB_INPUT_OPTIONS, showVoiceLab, voiceOptions } from "./voiceLab";
+import { showVoiceLab } from "./voiceLab";
 import { keepScreenOn } from "./wakeLock";
 
 /** 画面を開き直しても保つ実験の設定 */
@@ -53,13 +53,12 @@ interface LabView {
  * 画面のパドルを選ぶと、パドルで送った符号を復号する（符号の長さや間の確認用）
  */
 export function showLab(ctx: ScreenContext): void {
-  /** 入力を選び直したら、設定に保存して画面を作り直す（声は送信練習で選べないので保存しない） */
+  /** 入力を選び直したら、設定に保存して画面を作り直す */
   const changeInput = (v: string) => {
-    voiceOptions.selected = v === "voice";
-    if (v !== "voice") ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
+    ctx.updateSettings({ sendInput: v as Settings["sendInput"] });
     showLab(ctx);
   };
-  if (voiceOptions.selected) {
+  if (ctx.settings.sendInput === "voice") {
     showVoiceLab(ctx, changeInput);
     return;
   }
@@ -78,7 +77,7 @@ export function showLab(ctx: ScreenContext): void {
     log?.detach();
     showLab(ctx);
   };
-  const inputSelect = field("入力", select(LAB_INPUT_OPTIONS, via, (v) => {
+  const inputSelect = field("入力", select(INPUT_OPTIONS, via, (v) => {
     stop();
     pads?.detach();
     log?.detach();

@@ -15,6 +15,7 @@ export const INPUT_OPTIONS: [SendInput, string][] = [
   ["mic", "練習機の音（マイク）"],
   ["paddle", "画面のパドル"],
   ["straight", "画面の縦振電鍵"],
+  ["voice", "声で唱える（実験）"],
 ];
 
 /** 画面の縦振電鍵の説明 */

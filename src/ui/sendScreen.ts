@@ -1,6 +1,7 @@
-import type { DecodeEvent, MorseDecoder } from "../audio/decoder";
+import type { DecodeEvent } from "../audio/decoder";
 import { KeyListener } from "../audio/listener";
 import { VirtualPaddle, VirtualStraightKey } from "../audio/paddle";
+import { VoiceListener } from "../audio/voice";
 import { loadSends, saveSend, type SendRecord } from "../storage/db";
 import { CHARSET_LABELS, charsetChars, type CharsetId } from "../training/charset";
 import { farnsworth } from "../audio/timing";
@@ -39,13 +40,21 @@ let lastFreq = 700;
 let lastWpm = 20;
 /** 画面の縦振電鍵で前回推定した速度（WPM）。次の練習の初期値にする */
 let lastStraightWpm = 15;
+/** 声で前回推定した短点・長点の長さと境（秒）。次の練習の初期値にする */
+let lastVoice: { threshold: number; dotLen: number; dashLen: number } | null = null;
 
-/** 送信の入力（練習機の音を拾うマイクか、画面のパドル）に共通の部分 */
+/** 送信の入力（練習機の音を拾うマイク、画面のパドル・縦振電鍵、声）に共通の部分 */
 interface SendInput {
   /** 入力の時刻（秒） */
   readonly now: number;
   readonly keyDown: boolean;
-  readonly decoder: MorseDecoder;
+  readonly decoder: {
+    readonly wpm: number;
+    /** 文字として確定していない符号 */
+    readonly pendingCode: string;
+    /** 無音が続いたときの文字・語の区切り */
+    tick(t: number): DecodeEvent[];
+  };
   close(): void;
 }
 
@@ -81,18 +90,19 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     h("p", { class: "note" }, "送信練習の画面でだけ短点のタッチが届かない問題を調べるための切り替えです"),
   );
   const showInput = (v: Settings["sendInput"]) => {
-    layoutSettings.hidden = v === "mic";
+    layoutSettings.hidden = v === "mic" || v === "voice";
     paddleSettings.hidden = v !== "paddle";
     straightSettings.hidden = v !== "straight";
   };
   showInput(s.sendInput);
-  const startLabel = () => (ctx.settings.sendInput === "mic" ? "マイクを開始" : "はじめる");
+  const startLabel = () => (ctx.settings.sendInput === "mic" || ctx.settings.sendInput === "voice" ? "マイクを開始" : "はじめる");
   const startBtn = h("button", { class: "primary", type: "button", onclick: () => void startSend(ctx, { kind: "group" }) }, startLabel());
   ctx.render(
     h("h1", {}, "送信練習"),
     h("p", { class: "note" },
-      "練習機のサイドトーンを iPhone のマイクで拾うか、画面のパドル・縦振電鍵で送った符号を復号・採点します。" +
-      "マイクのときは送信中にアプリから音を出しません。採点は試験の基準（誤字・脱字・冗字 3 点、符号不明りょう 1 点など）です"),
+      "練習機のサイドトーンを iPhone のマイクで拾うか、画面のパドル・縦振電鍵で送った符号、声で唱えた符号を復号・採点します。" +
+      "マイクのときは送信中にアプリから音を出しません。採点は試験の基準（誤字・脱字・冗字 3 点、符号不明りょう 1 点など）です。" +
+      "声は「タ」「ラ」で短点、「ター」「ラー」で長点で、符号の長さ（不明りょう・符号の質）は採点しません"),
     h("div", { class: "settings" },
       field("入力", select(
         INPUT_OPTIONS,
@@ -164,7 +174,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
           ...sends.slice(0, 5).map((r) =>
             h("tr", {},
               h("th", {}, new Date(r.ts).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })),
-              h("td", {}, (r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ") + (r.input === "paddle" ? "（パドル）" : r.input === "straight" ? "（縦振）" : "")),
+              h("td", {}, (r.mode === "mock" ? `模擬 ${r.minutes} 分` : "グループ") + (r.input === "paddle" ? "（パドル）" : r.input === "straight" ? "（縦振）" : r.input === "voice" ? "（声）" : "")),
               h("td", {}, `${r.points} 点`),
               h("td", {}, r.cpm === null ? "―" : `${Math.round(r.cpm)} 字/分`),
               h("td", {}, `${r.target.length} 字`),
@@ -208,7 +218,7 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   let shownGroup = -1;
   const via = ctx.settings.sendInput;
   // 画面のパドル・縦振電鍵では、届いたタッチを記録して結果画面に出す（取りこぼしの原因を実機で調べるため）
-  const log = via === "mic" ? null : touchLog({ live: false, header: `送信練習・配置 ${ctx.settings.sendPadLayout}` });
+  const log = via === "mic" || via === "voice" ? null : touchLog({ live: false, header: `送信練習・配置 ${ctx.settings.sendPadLayout}` });
   const onEvents = (events: DecodeEvent[], now: number) => {
     if (log) for (const e of events) if (e.type === "char") log.add(`文字 ${e.char ?? prettyCode(e.code)}`);
     if (session.handle(events, now)) dirty = true;
@@ -280,6 +290,30 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   };
   ctx.setActive({ key: (e) => pads?.key(e) ?? false, abort: close });
 
+  if (!input && via === "voice") {
+    // 唱える速さは人が決めるので、VVV で短点と長点の長さを合わせてから始める（固定はしない）
+    try {
+      const voice = await VoiceListener.open(
+        { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        ctx.settings.voiceTuning,
+        {
+          onEvents,
+          onEnded: () => {
+            ctx.stopDrill();
+            showBanner("マイクが止められたため、練習を中断しました");
+          },
+        },
+      );
+      if (lastVoice) Object.assign(voice.decoder, lastVoice);
+      input = voice;
+    } catch (e) {
+      console.error("failed to start microphone", e);
+      ctx.setActive(null);
+      showBanner(`マイクを開始できませんでした（${e instanceof Error ? e.name : String(e)}）`);
+      void showSendMenu(ctx);
+      return;
+    }
+  }
   if (!input) {
     try {
       input = await KeyListener.open(
@@ -330,6 +364,9 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
       }
       const locked = session.phase === "warmup" ? "" : "（固定）";
       setText(speed, `${Math.round(l.detector.freq)} Hz・${l.decoder.wpm.toFixed(1)} WPM${locked}`);
+    } else if (l instanceof VoiceListener) {
+      const ms = (s: number) => `${Math.round(s * 1000)} ms`;
+      setText(speed, `声・短点 ${ms(l.decoder.dotLen)}・長点 ${ms(l.decoder.dashLen)}`);
     } else if (via === "paddle") {
       setText(speed, `画面のパドル・${l.decoder.wpm.toFixed(0)} WPM`);
     } else {
@@ -346,7 +383,11 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
           ? "お題を送ってください"
           : session.phase === "warmup" && via === "straight"
             ? "まず VVV を送ってください（速度の推定を合わせます）"
-            : STATUS[session.phase];
+            : session.phase === "warmup" && via === "voice"
+              ? "まず VVV を唱えてください（短点と長点の長さを合わせます）"
+              : session.phase === "ready" && via === "voice"
+                ? "準備できました。お題を唱えてください"
+                : STATUS[session.phase];
       skipBtn.hidden = session.phase !== "warmup";
     }
     if (dirty) {
@@ -384,6 +425,10 @@ async function startSend(ctx: ScreenContext, mode: SendMode): Promise<void> {
   function finish(): void {
     const wpm = input?.decoder.wpm ?? 0;
     if (via === "straight" && input) lastStraightWpm = input.decoder.wpm;
+    if (input instanceof VoiceListener) {
+      const { threshold, dotLen, dashLen } = input.decoder;
+      lastVoice = { threshold, dotLen, dashLen };
+    }
     close();
     ctx.setActive(null);
     session.finish();
@@ -460,6 +505,21 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
   ];
 
   const replay = replayControls(ctx, session, record);
+  // 声では符号の長さを推定した短点長で整えて渡すので、符号の質は意味がない
+  const qualityCard = record.input === "voice"
+    ? h("p", { class: "note" }, "声では符号の長さ（符号の質・不明りょう）は見ません。再生は推定した短点長で整えた符号です")
+    : h("div", { class: "chart-card" },
+      h("h2", {}, "符号の質"),
+      h("table", { class: "lab-table" },
+        h("tr", {}, h("th", {}, ""), h("th", {}, "平均"), h("th", {}, "ばらつき"), h("th", {}, "標準")),
+        ...qualityRows.map(([label, x, std]) =>
+          h("tr", {}, h("th", {}, label), h("td", {}, fmt(x)), h("td", {}, cv(x)), h("td", {}, std))),
+      ),
+      h("p", { class: "note" }, "長さは推定短点長を 1 とした値。ばらつきは標準偏差 ÷ 平均"),
+      quality.notes.length > 0
+        ? h("ul", { class: "send-notes" }, ...quality.notes.map((n) => h("li", {}, n)))
+        : h("p", {}, "目立った癖はありません"),
+    );
 
   ctx.render(
     h("h1", {}, mode.kind === "mock" ? `模擬試験の結果（${mode.minutes} 分・目標 ${mode.cpm} 字/分）` : "結果"),
@@ -479,18 +539,7 @@ function showSendResult(ctx: ScreenContext, session: SendSession, record: SendRe
     h("p", { class: "note" },
       "下段が復号した文字。赤は誤り、黄は符号不明りょう、－は脱字" + (score.unsent > 0 ? "、空欄は未送信" : "") +
       "。組をタップすると、その組の自分の送信と正しい符号を続けて鳴らします"),
-    h("div", { class: "chart-card" },
-      h("h2", {}, "符号の質"),
-      h("table", { class: "lab-table" },
-        h("tr", {}, h("th", {}, ""), h("th", {}, "平均"), h("th", {}, "ばらつき"), h("th", {}, "標準")),
-        ...qualityRows.map(([label, x, std]) =>
-          h("tr", {}, h("th", {}, label), h("td", {}, fmt(x)), h("td", {}, cv(x)), h("td", {}, std))),
-      ),
-      h("p", { class: "note" }, "長さは推定短点長を 1 とした値。ばらつきは標準偏差 ÷ 平均"),
-      quality.notes.length > 0
-        ? h("ul", { class: "send-notes" }, ...quality.notes.map((n) => h("li", {}, n)))
-        : h("p", {}, "目立った癖はありません"),
-    ),
+    qualityCard,
     h("div", { class: "row" },
       h("button", { class: "primary", type: "button", onclick: () => (replay.stop(), void startSend(ctx, mode)) }, "もう一度"),
       h("button", { type: "button", onclick: () => (replay.stop(), void showSendMenu(ctx)) }, "送信練習メニュー"),

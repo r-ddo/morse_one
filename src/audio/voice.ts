@@ -359,11 +359,13 @@ export class VoiceDecoder {
       }
       out.push({ type: "mark", kind: this.classify(d), duration: d, units: d / this.dotLen });
     });
-    const gaps = syllables.slice(1).map((s, i) => s.start - syllables[i].end);
-    out.push({
-      type: "char", char, code, start: syllables[0].start, end: syllables.at(-1)!.end,
-      marks: lengths, gaps, dot: this.dotLen, bias: 0,
-    });
+    // 採点と再生には、唱えた長さではなく、推定した短点長での整った符号を渡す。声では短点と長点の比が 1:2 前後で、
+    // 練習機の基準（1:3）で符号の質や不明りょうを判定すると、短点をすべて不明りょうとしかねないため。文字間はそのまま測る
+    const dot = this.dotLen;
+    const marks = [...code].map((k) => (k === "." ? dot : 3 * dot));
+    const start = syllables[0].start;
+    const end = start + marks.reduce((a, b) => a + b, 0) + (marks.length - 1) * dot;
+    out.push({ type: "char", char, code, start, end, marks, gaps: marks.slice(1).map(() => dot), dot, bias: 0 });
     return out;
   }
 

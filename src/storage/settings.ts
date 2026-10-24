@@ -1,6 +1,7 @@
+import { DEFAULT_TUNING, type VoiceTuning } from "../audio/voice";
 import type { CharsetId } from "../training/charset";
 
-export type SendInput = "mic" | "paddle" | "straight";
+export type SendInput = "mic" | "paddle" | "straight" | "voice";
 
 export interface Settings {
   charset: CharsetId;
@@ -42,7 +43,7 @@ export interface Settings {
   sendMockMinutes: number;
   /** グループ送信で、送信の苦手な文字を多めに出すか */
   sendFocusWeak: boolean;
-  /** 送信練習の入力。練習機の音をマイクで拾うか、画面（キーボード）のパドルか縦振電鍵を使うか */
+  /** 送信練習の入力。練習機の音をマイクで拾うか、画面（キーボード）のパドルか縦振電鍵を使うか、声で唱えるか */
   sendInput: SendInput;
   /** 画面のパドルの速度（WPM） */
   paddleWpm: number;
@@ -53,6 +54,8 @@ export interface Settings {
    * page: 送信実験と同じく、ページの下にパッドを固定してページをスクロールする
    */
   sendPadLayout: "fit" | "page";
+  /** 声で唱える入力の検出の調整（送信実験で変える） */
+  voiceTuning: VoiceTuning;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -81,6 +84,7 @@ export const DEFAULT_SETTINGS: Settings = {
   paddleWpm: 20,
   paddleSwap: false,
   sendPadLayout: "fit",
+  voiceTuning: DEFAULT_TUNING,
 };
 
 const KEY = "morse_one.settings";

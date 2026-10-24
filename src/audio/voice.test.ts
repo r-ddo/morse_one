@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DecodeEvent } from "./decoder";
+import { evaluateSend, type SentChar } from "../training/sendScoring";
 import { DEFAULT_TUNING, VoiceDecoder, VoiceDetector, encodeWav, type VoiceChar, type VoiceTuning } from "./voice";
 
 const RATE = 48000;
@@ -203,6 +204,43 @@ describe("VoiceDecoder", () => {
     // 実機の録音（2026-10-24）: 短点 105〜195 ms、長点 230〜310 ms
     const { samples } = voice("ターラターラ ターターラター ターラターラ ターターラター ターラタ タ", { short: 0.145, long: 0.265, jitter: 0.3 });
     expect(decode(samples).text).toBe("CQCQDE");
+  });
+
+  it("採点に渡す文字の符号の長さは、推定した短点長で整える", () => {
+    const { samples } = voice("タター タララ");
+    const chars: Extract<DecodeEvent, { type: "char" }>[] = [];
+    const detector = new VoiceDetector(RATE);
+    const decoder = new VoiceDecoder();
+    const take = (events: DecodeEvent[]) => events.forEach((e) => e.type === "char" && chars.push(e));
+    for (let i = 0; i < samples.length; i += 1024) {
+      for (const e of detector.process(samples.subarray(i, i + 1024)).events) {
+        take(e.down ? decoder.keyDown(e.t) : decoder.keyUp(e.t, e.split ?? false, e.dipDb ?? 0));
+      }
+      take(decoder.tick(detector.time));
+    }
+    expect(chars.map((c) => c.char)).toEqual(["A", "S"]);
+    const [a] = chars;
+    expect(a.marks).toEqual([a.dot, 3 * a.dot]);
+    expect(a.gaps).toEqual([a.dot]);
+    expect(a.end - a.start).toBeCloseTo(5 * a.dot);
+  });
+
+  it("声で唱えた文字は、短点と長点の比が 1:2 前後でも不明りょうにしない", () => {
+    const { samples } = voice("タター ターラララ ターラターラ ターラタ タ", { short: 0.14, long: 0.27, jitter: 0.2 });
+    const sent: SentChar[] = [];
+    const detector = new VoiceDetector(RATE);
+    const decoder = new VoiceDecoder();
+    const take = (events: DecodeEvent[]) => events.forEach((e) => e.type === "char" && sent.push(e));
+    for (let i = 0; i < samples.length; i += 1024) {
+      for (const e of detector.process(samples.subarray(i, i + 1024)).events) {
+        take(e.down ? decoder.keyDown(e.t) : decoder.keyUp(e.t, e.split ?? false, e.dipDb ?? 0));
+      }
+      take(decoder.tick(detector.time));
+    }
+    take(decoder.tick(detector.time + 2));
+    const { score } = evaluateSend("ABCDE", sent);
+    expect(score.unclear).toBe(0);
+    expect(score.deduction).toBe(0);
   });
 
   it("語の区切りを出す", () => {

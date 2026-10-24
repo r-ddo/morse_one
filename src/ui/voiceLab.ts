@@ -1,5 +1,5 @@
 import type { DecodeEvent } from "../audio/decoder";
-import { DEFAULT_TUNING, VoiceListener, type VoiceChar, type VoiceFrame, type VoiceTuning } from "../audio/voice";
+import { VoiceListener, type VoiceChar, type VoiceFrame, type VoiceTuning } from "../audio/voice";
 import { prepareCanvas } from "./canvas";
 import type { ScreenContext } from "./context";
 import { h, prettyCode, setText } from "./dom";
@@ -7,15 +7,6 @@ import { field, range, select } from "./form";
 import { INPUT_OPTIONS } from "./paddlePads";
 import { showBanner } from "./updateBanner";
 import { keepScreenOn } from "./wakeLock";
-
-/** 送信実験の入力の選択肢（声は送信実験だけ） */
-export const LAB_INPUT_OPTIONS: [string, string][] = [...INPUT_OPTIONS, ["voice", "声で唱える（実験）"]];
-
-/** 画面を開き直しても保つ実験の設定。声を選んでいるかは設定に保存しない（送信練習では選べないため） */
-export const voiceOptions = {
-  selected: false,
-  tuning: { ...DEFAULT_TUNING } as VoiceTuning,
-};
 
 /** 波形表示の長さ（秒） */
 const HISTORY_SEC = 4;
@@ -43,17 +34,17 @@ export function showVoiceLab(ctx: ScreenContext, onInputChange: (v: string) => v
   let session: VoiceSession | null = null;
   let starting = false;
 
-  const inputSelect = field("入力", select(LAB_INPUT_OPTIONS, "voice", (v) => {
+  const inputSelect = field("入力", select(INPUT_OPTIONS, "voice", (v) => {
     stop();
     onInputChange(v);
   }));
   const startBtn = h("button", { type: "button", class: "primary", onclick: () => void toggle() }, "マイクを開始");
 
   const setTuning = (patch: Partial<VoiceTuning>) => {
-    voiceOptions.tuning = { ...voiceOptions.tuning, ...patch };
-    session?.listener.setTuning(voiceOptions.tuning);
+    ctx.updateSettings({ voiceTuning: { ...ctx.settings.voiceTuning, ...patch } });
+    session?.listener.setTuning(ctx.settings.voiceTuning);
   };
-  const { tuning } = voiceOptions;
+  const tuning = ctx.settings.voiceTuning;
   const sliders = h("div", { class: "settings" },
     h("h2", {}, "検出の調整"),
     field("声ありとみなす強さ（雑音から）", range(6, 40, 1, tuning.onDb, (v) => `${v} dB`, (v) => setTuning({ onDb: v }))),
@@ -119,7 +110,8 @@ export function showVoiceLab(ctx: ScreenContext, onInputChange: (v: string) => v
       h("p", { class: "note" },
         "時刻・文字・符号のあとに各音節の長さ（ms、次の音節の出だしまで）。間の [ ] は区切り方で、" +
         "「無音」は声が途切れた（タ）、「↓」は弱まった（ラ）。「前」は前の文字からの無音、「境」は短点と長点を分けた長さ。" +
-        "うまくいかないときは、クリアしてから同じ文字を何度か唱え、記録のコピーと録音（直近 2 分）を送ってください"),
+        "うまくいかないときは、クリアしてから同じ文字を何度か唱え、記録のコピーと録音（直近 2 分）を送ってください。" +
+      "調整は送信練習でも使います"),
       view.recorded,
       view.log,
     ),
@@ -133,7 +125,7 @@ export function showVoiceLab(ctx: ScreenContext, onInputChange: (v: string) => v
     starting = true;
     startBtn.disabled = true;
     try {
-      session = await VoiceSession.open(view, () => {
+      session = await VoiceSession.open(view, () => ctx.settings.voiceTuning, () => {
         stop();
         showBanner("マイクが止められました");
       });
@@ -168,17 +160,20 @@ class VoiceSession {
   private releaseScreen: () => void = () => {};
   listener!: VoiceListener;
 
-  private constructor(private readonly view: VoiceView) {
+  private constructor(
+    private readonly view: VoiceView,
+    private readonly tuning: () => VoiceTuning,
+  ) {
     void keepScreenOn().then((release) => (this.releaseScreen = release));
     this.raf = requestAnimationFrame(this.draw);
   }
 
-  static async open(view: VoiceView, onEnded: () => void): Promise<VoiceSession> {
-    const session = new VoiceSession(view);
+  static async open(view: VoiceView, tuning: () => VoiceTuning, onEnded: () => void): Promise<VoiceSession> {
+    const session = new VoiceSession(view, tuning);
     try {
       session.listener = await VoiceListener.open(
         { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        voiceOptions.tuning,
+        tuning(),
         {
           onEvents: (events) => session.apply(events),
           onFrames: (frames) => session.addFrames(frames),
@@ -214,7 +209,7 @@ class VoiceSession {
   }
 
   logText(): string {
-    const { onDb, dipDb, charGap } = voiceOptions.tuning;
+    const { onDb, dipDb, charGap } = this.tuning();
     const head = `版 ${__BUILD_ID__}・送信実験（声）・強さ ${onDb} dB・弱まり ${dipDb} dB・無音 ${Math.round(charGap * 1000)} ms`;
     return [head, ...this.lines].join("\n");
   }
@@ -284,7 +279,7 @@ class VoiceSession {
       this.logDirty = false;
       view.log.textContent = this.logText();
     }
-    drawVoice(view.envelope, this.frames, listener.now, voiceOptions.tuning.onDb);
+    drawVoice(view.envelope, this.frames, listener.now, this.tuning().onDb);
   };
 }
 
