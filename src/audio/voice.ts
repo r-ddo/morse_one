@@ -23,7 +23,7 @@ const HOP = 0.005;
 const WINDOW_HOPS = 3;
 /** 声なしに戻る、雑音に対する強さ（dB） */
 const OFF_DB = 8;
-/** 雑音はこの長さ（秒）の間の一番弱いところとする。ブロック（秒）ごとの最小値を並べて求める */
+/** 雑音はこの長さ（秒）の間の一番弱いところとする。ブロック（秒）ごとの中央値を並べ、その最小値をとる */
 const NOISE_SPAN = 1.5;
 const NOISE_BLOCK = 0.1;
 /**
@@ -80,8 +80,7 @@ export class VoiceDetector {
   /** 雑音の強さ。まだ分からなければ（入力がほぼ 0 のまま）声を検出しない */
   private noise = Infinity;
   private readonly noiseBlocks: number[] = [];
-  private blockMin = Infinity;
-  private blockHops = 0;
+  private readonly block: number[] = [];
   /** 出だしをさかのぼるための直近のフレームの強さ */
   private readonly recent: { t: number; db: number }[] = [];
   private state = false;
@@ -187,18 +186,21 @@ export class VoiceDetector {
   }
 
   /**
-   * 雑音を直近 NOISE_SPAN 秒の一番弱いところとする。声ありかどうかによらず追うので、
+   * 雑音を直近 NOISE_SPAN 秒の一番弱いところとする。ブロックの中央値を使うので、短い谷や入力がほぼ 0 の一瞬に引っ張られない
+   * （マイクを開いた直後に −98 dB が 50 ms ほど続き、それを雑音として床の雑音で反応した。2026-10-24 の録音）。
+   * 入力がほぼ 0 のところが半分以上のブロックは数えない。声ありかどうかによらず追うので、
    * 床が上がっても（iOS の自動ゲインなど）しばらくすれば声ありのままにならない
    */
   private trackNoise(db: number): void {
-    if (db > NOISE_MIN) this.blockMin = Math.min(this.blockMin, db);
-    if (++this.blockHops * HOP >= NOISE_BLOCK) {
-      if (this.blockMin < Infinity) this.noiseBlocks.push(this.blockMin);
-      if (this.noiseBlocks.length * NOISE_BLOCK > NOISE_SPAN) this.noiseBlocks.shift();
-      this.blockMin = Infinity;
-      this.blockHops = 0;
-    }
-    this.noise = Math.min(this.blockMin, ...this.noiseBlocks);
+    this.block.push(db);
+    if (this.block.length * HOP < NOISE_BLOCK) return;
+    const sorted = this.block.sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    this.block.length = 0;
+    if (median <= NOISE_MIN) return;
+    this.noiseBlocks.push(median);
+    if (this.noiseBlocks.length * NOISE_BLOCK > NOISE_SPAN) this.noiseBlocks.shift();
+    this.noise = Math.min(...this.noiseBlocks);
   }
 
   private begin(t: number, db: number): void {

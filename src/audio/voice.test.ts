@@ -139,8 +139,17 @@ describe("VoiceDetector", () => {
     expect(decode(all).text).toBe("A");
   });
 
+  it("マイクを開いた直後のごく弱い入力を雑音の基準にしない", () => {
+    // 実機の録音（2026-10-24）: 最初の 50 ms ほど −98 dB 前後で、そのあと床の雑音（−82 dB 前後）になる
+    const { samples } = voice("タタター", { noise: 0.0007 });
+    const rand = rng(9);
+    for (let i = 0; i < 0.05 * RATE; i++) samples[i] = (rand() * 2 - 1) * 0.0001;
+    expect(decode(samples).text).toBe("U");
+  });
+
   it.each([70, 80, 110])("声が低くても（%i Hz）長い音節を分けない", (f0) => {
-    const samples = new Float32Array(1.5 * RATE);
+    const rand = rng(5);
+    const samples = Float32Array.from({ length: 1.5 * RATE }, () => (rand() * 2 - 1) * 0.0003);
     let phase = 0;
     for (let i = Math.round(0.3 * RATE); i < Math.round(0.9 * RATE); i++) {
       const t = i / RATE;
@@ -148,7 +157,7 @@ describe("VoiceDetector", () => {
       phase += (2 * Math.PI * f0 * (1 + 0.03 * Math.sin(2 * Math.PI * 5 * t))) / RATE;
       let x = 0;
       for (let h = 1; h <= 12; h++) x += Math.sin(h * phase) / h;
-      samples[i] = 0.1 * env * x;
+      samples[i] += 0.1 * env * x;
     }
     expect(decode(samples).onsets).toHaveLength(1);
   });
