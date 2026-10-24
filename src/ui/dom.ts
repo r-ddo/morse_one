@@ -21,6 +21,11 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
+/** 文字を表示用にする。数字の 0 は英字の O と見分けられるよう、斜線付きのゼロ（Ø）にする */
+export function prettyChar(text: string): string {
+  return text.replaceAll("0", "Ø");
+}
+
 /** 符号を表示用の記号に変換する（例: ".-" → "·−"） */
 export function prettyCode(code: string | undefined): string {
   return (code ?? "").replaceAll(".", "·").replaceAll("-", "−");

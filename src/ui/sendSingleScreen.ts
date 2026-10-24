@@ -4,7 +4,7 @@ import { saveSendAttempt, type SendAttempt } from "../storage/db";
 import { charsetChars } from "../training/charset";
 import { SendSingleDrill, sendSingleStats, type SendSingleResult } from "../training/sendSingle";
 import type { ScreenContext } from "./context";
-import { h, prettyCode, setClass, setText } from "./dom";
+import { h, prettyChar, prettyCode, setClass, setText } from "./dom";
 import type { TouchPads } from "./paddlePads";
 import { createPadInput, describeInput, lockAfterWarmup, needsWarmup, openMicInput, rememberInput, warmupText, type SendInput } from "./sendInput";
 import { showBanner } from "./updateBanner";
@@ -140,7 +140,7 @@ export async function startSendSingle(ctx: ScreenContext, attempts: readonly Sen
       setText(feedback, "");
       return;
     }
-    setText(target, drill.target);
+    setText(target, prettyChar(drill.target));
     setText(code, drill.showCode ? prettyCode(MORSE[drill.target]) : "");
     const last = drill.results.at(-1);
     const answered = drill.phase === "correct" || drill.phase === "retry";
@@ -152,7 +152,7 @@ export async function startSendSingle(ctx: ScreenContext, attempts: readonly Sen
     } else if (drill.phase === "retry" && drill.lastSent !== null) {
       const sent = drill.lastSent;
       const sentCode = MORSE[sent] ?? sent;
-      text = `✕ ${prettyCode(sentCode)}${MORSE[sent] ? `（${sent}）` : ""}。正しく送ってください`;
+      text = `✕ ${prettyCode(sentCode)}${MORSE[sent] ? `（${prettyChar(sent)}）` : ""}。正しく送ってください`;
       cls += " ng";
     } else if (drill.showCode && !answered) {
       text = "符号を見て送ってください";
@@ -202,7 +202,7 @@ function showResult(
     ),
     missed.length > 0 && h("div", { class: "misses" },
       h("h2", {}, "覚え直す文字"),
-      ...missed.map((c) => h("span", { class: "chip" }, `${c} ${prettyCode(MORSE[c])}`)),
+      ...missed.map((c) => h("span", { class: "chip" }, `${prettyChar(c)} ${prettyCode(MORSE[c])}`)),
     ),
     h("div", { class: "row" },
       h("button", { class: "primary", type: "button", onclick: again }, "もう一度"),

@@ -7,7 +7,7 @@ import { replayIntervals, type SendResult, type SentChar, type Spread } from "..
 import { sendCharStats, sendConfusions, sendErrorRate, sendWeights, weakSendChars } from "../training/sendWeak";
 import { examPoints } from "../training/scoring";
 import type { ScreenContext } from "./context";
-import { h, prettyCode, setClass, setText } from "./dom";
+import { h, prettyChar, prettyCode, setClass, setText } from "./dom";
 import { field, select } from "./form";
 import { touchLog, type TouchLog } from "./touchLog";
 import { INPUT_OPTIONS, paddleSettingsCard, straightKeyNote, type TouchPads } from "./paddlePads";
@@ -143,7 +143,7 @@ export async function showSendMenu(ctx: ScreenContext): Promise<void> {
     }, "単字即答（送信）をはじめる"),
     singleWeak.length > 0 && h("div", { class: "misses" },
       h("h2", {}, "単字即答（送信）の苦手な文字"),
-      ...singleWeak.map((x) => h("span", { class: "chip" }, `${x.char} ${prettyCode(MORSE[x.char] ?? "")}`)),
+      ...singleWeak.map((x) => h("span", { class: "chip" }, `${prettyChar(x.char)} ${prettyCode(MORSE[x.char] ?? "")}`)),
     ),
     h("h2", {}, "模擬試験"),
     h("p", { class: "note" },
