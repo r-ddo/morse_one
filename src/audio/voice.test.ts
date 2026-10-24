@@ -24,6 +24,10 @@ interface VoiceOptions {
   flapDb?: number;
   /** 背景の雑音の振幅 */
   noise?: number;
+  /** 文字の最後の母音が引く、弱い尾の長さ（秒）。尾のあとに文字間の無音を置く */
+  tail?: number;
+  /** 音節ごとに長さを ±この割合でばらつかせる */
+  jitter?: number;
 }
 
 /**
@@ -32,7 +36,8 @@ interface VoiceOptions {
  * 「ラ」の出だしでは少し弱める。最初の音節の出だしの時刻（秒）も返す
  */
 function voice(text: string, opts: VoiceOptions = {}): { samples: Float32Array; onsets: number[] } {
-  const { short = 0.13, long = 0.32, charGap = 0.22, closure = 0.04, flapDb = 12, noise = 0.001 } = opts;
+  const { short = 0.13, long = 0.32, charGap = 0.22, closure = 0.04, flapDb = 12, noise = 0.001, tail = 0, jitter = 0 } = opts;
+  const vary = rng(11);
   const chars = text.split(/( |\/)/).filter((s) => s !== "" && s !== " ");
   // 音節: [出だし, 長さ, 子音]
   const syllables: { start: number; len: number; consonant: "t" | "r"; first: boolean }[] = [];
@@ -44,11 +49,11 @@ function voice(text: string, opts: VoiceOptions = {}): { samples: Float32Array; 
     }
     const parts = c.match(/[タラ]ー?/g) ?? [];
     parts.forEach((p, i) => {
-      const len = p.length > 1 ? long : short;
+      const len = (p.length > 1 ? long : short) * (1 + jitter * (vary() * 2 - 1));
       syllables.push({ start: t, len, consonant: p[0] === "タ" ? "t" : "r", first: i === 0 });
       t += len;
     });
-    t += charGap;
+    t += tail + charGap;
   }
   const out = new Float32Array(Math.ceil((t + 0.5) * RATE));
   const rand = rng(3);
@@ -74,6 +79,13 @@ function voice(text: string, opts: VoiceOptions = {}): { samples: Float32Array; 
       out[i] += 0.1 * env * x;
       // 破裂音
       if (!s.first && s.consonant === "t" && u < 0.01) out[i] += 0.05 * (rand() * 2 - 1);
+    }
+    // 尾: 一番強いところより 28 dB 弱く始まり、さらに弱まっていく
+    for (let i = to; last && i < to + tail * RATE; i++) {
+      const u = (i - to) / RATE;
+      let x = 0;
+      for (let h = 1; h <= 10; h++) x += Math.sin(2 * Math.PI * 140 * h * (i / RATE)) / h;
+      out[i] += 0.1 * 0.04 * Math.exp(-u / 0.08) * x;
     }
   });
   return { samples: out, onsets: syllables.map((s) => s.start) };
@@ -179,6 +191,18 @@ describe("VoiceDecoder", () => {
   it("長点ばかり・短点ばかりの文字が続いても分ける", () => {
     const { samples } = voice("タタタター ターターター タララ ター タ タラー");
     expect(decode(samples).text).toBe("VOSTEA");
+  });
+
+  it("文字の最後の母音が弱い尾を引いても、短点を長点にせず、次の文字とつなげない", () => {
+    // 実機の録音（2026-10-24）: 尾は 100〜160 ms、尾のあとの無音は 50〜90 ms
+    const { samples } = voice("ターラタ タ タータターラ ターターラター", { tail: 0.13, charGap: 0.07 });
+    expect(decode(samples).text).toBe("DECQ");
+  });
+
+  it("短点と長点の長さが詰まっていても分ける", () => {
+    // 実機の録音（2026-10-24）: 短点 105〜195 ms、長点 230〜310 ms
+    const { samples } = voice("ターラターラ ターターラター ターラターラ ターターラター ターラタ タ", { short: 0.145, long: 0.265, jitter: 0.3 });
+    expect(decode(samples).text).toBe("CQCQDE");
   });
 
   it("語の区切りを出す", () => {

@@ -35,6 +35,13 @@ const NOISE_MIN = -100;
 const BACKDATE = 0.06;
 /** これより短い音節や変化は無視する（秒） */
 const MIN_SYLLABLE = 0.05;
+/** 前後に声のない（文字 1 つだけの）音節でこれより短いものは、物音などとして捨てる（秒） */
+const MIN_ISOLATED = 0.08;
+/**
+ * 声が途切れて終わった音節は、その音節の一番強いところからこれだけ（dB）弱まったところで終わったとする。
+ * 文字の最後の母音は弱い尾を 100〜160 ms 引くので、雑音まで下がるのを待つと短点が長点の長さになる（2026-10-24 の録音）
+ */
+const END_DB = 20;
 const MIN_CHANGE = 0.01;
 /** 声の帯域（Hz）。「t」の破裂音（高い帯域）で閉鎖の無音が埋まらないよう、上は低めにする */
 const BAND: [number, number] = [150, 1500];
@@ -91,6 +98,8 @@ export class VoiceDetector {
   private dip: { db: number; t: number } | null = null;
   /** 今の音節で一番強いところ（記録用） */
   private top = -Infinity;
+  /** 今の音節で、一番強いところから END_DB 以内だった最後の時刻 */
+  private strongUntil = 0;
 
   constructor(readonly sampleRate: number, tuning: VoiceTuning = DEFAULT_TUNING) {
     this.tuning = tuning;
@@ -154,13 +163,14 @@ export class VoiceDetector {
           events.push({ down: true, t: at });
           onset = true;
         } else {
-          events.push({ down: false, t: at, split: false, dipDb: this.top - db });
+          events.push({ down: false, t: Math.min(at, this.strongUntil), split: false, dipDb: this.top - db });
         }
       }
     } else {
       this.pending = 0;
       if (this.state) {
         this.top = Math.max(this.top, db);
+        if (db >= this.top - END_DB) this.strongUntil = t;
         if (this.dip === null) {
           this.peak = Math.max(this.peak, db);
           if (db < this.peak) this.dip = { db, t };
@@ -207,6 +217,7 @@ export class VoiceDetector {
     this.start = t;
     this.peak = db;
     this.top = db;
+    this.strongUntil = t;
     this.dip = null;
   }
 }
@@ -235,8 +246,8 @@ export interface VoiceChar {
 
 /** 短点・長点の長さの推定に使う直近の音節の数 */
 const RECENT = 24;
-/** 短点と長点の 2 群に分かれているとみなす長さの比（声は 3 倍にはならない） */
-const SPLIT_RATIO = 1.4;
+/** 短点と長点の 2 群に分かれているとみなす、両群の平均の比（声では 3 倍にはならない） */
+const SPLIT_RATIO = 1.5;
 
 /**
  * 音節の並びからモールス符号を復元する。
@@ -299,6 +310,10 @@ export class VoiceDecoder {
     const start = this.downAt;
     this.downAt = null;
     // 短すぎる声は雑音として捨てる（直前の音節につながっていたら、その音節を伸ばす）
+    if (!split && this.pending.length === 0 && t - start < MIN_ISOLATED
+      && (this.lastEnd === null || start - this.lastEnd >= this.charGap)) {
+      return [];
+    }
     if (t - start < MIN_SYLLABLE) {
       const last = this.pending.at(-1);
       if (last && last.split && last.end === start) Object.assign(last, { end: t, split });
@@ -352,19 +367,13 @@ export class VoiceDecoder {
     return out;
   }
 
-  /** 直近の音節の長さを 2 群に分け、その間（幾何平均）を短点と長点の境にする */
+  /**
+   * 直近の音節の長さを 2 群に分け、両群の平均の中間を短点と長点の境にする。
+   * 幾何平均では、長点の前の短点（次の音節の出だしまでで長めに測れる）を長点にした（2026-10-24 の録音）
+   */
   private estimate(): void {
     const sorted = [...this.recent].sort((a, b) => a - b);
-    const minCluster = sorted.length >= 5 ? Math.ceil(sorted.length * 0.15) : 1;
-    let split = -1;
-    let best = SPLIT_RATIO;
-    for (let i = minCluster - 1; i < sorted.length - minCluster; i++) {
-      const ratio = sorted[i + 1] / sorted[i];
-      if (ratio >= best) {
-        best = ratio;
-        split = i;
-      }
-    }
+    const split = splitTwo(sorted);
     if (split < 0) {
       // 1 群しかないときは、今の境のどちら側かで短点・長点の長さだけ合わせる
       const m = mean(sorted);
@@ -374,8 +383,35 @@ export class VoiceDecoder {
       this.dotLen = mean(sorted.slice(0, split + 1));
       this.dashLen = mean(sorted.slice(split + 1));
     }
-    this.threshold = Math.sqrt(this.dotLen * this.dashLen);
+    this.threshold = (this.dotLen + this.dashLen) / 2;
   }
+}
+
+/**
+ * 昇順の長さを、対数での群内の分散が一番小さくなるところで 2 群に分け、短い群の最後の添字を返す（Otsu の方法）。
+ * 両群の平均の比が SPLIT_RATIO に届かなければ -1（1 群）。隣どうしの比が一番開くところで分けると、
+ * 短点と長点の長さが詰まっているとき（短点 105〜195 ms、長点 230〜310 ms）に 1 群とみなした（2026-10-24 の録音）
+ */
+function splitTwo(sorted: readonly number[]): number {
+  const logs = sorted.map(Math.log);
+  const minCluster = sorted.length >= 5 ? Math.ceil(sorted.length * 0.15) : 1;
+  let best = -1;
+  let bestCost = Infinity;
+  for (let i = minCluster - 1; i < sorted.length - minCluster; i++) {
+    const cost = spread(logs.slice(0, i + 1)) + spread(logs.slice(i + 1));
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = i;
+    }
+  }
+  if (best < 0 || mean(sorted.slice(best + 1)) / mean(sorted.slice(0, best + 1)) < SPLIT_RATIO) return -1;
+  return best;
+}
+
+/** 平均からのずれの 2 乗和 */
+function spread(xs: readonly number[]): number {
+  const m = mean(xs);
+  return xs.reduce((a, x) => a + (x - m) ** 2, 0);
 }
 
 /** 音節の長さ。次の音節が続いていれば（「タラ」「タタ」）その出だしまで、最後は声の終わりまで */
